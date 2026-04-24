@@ -1,0 +1,44 @@
+# ============================================================
+# config/paths.yaml — 所有数据路径集中管理
+# ⚠️  绝不在此文件写死 G:\ 或 /data/ 等绝对路径
+#     所有路径从 .env 中的 DATA_ROOT 变量派生
+#
+# Python 加载方式（见 scripts/check_data.py 的 load_config）:
+#   from dotenv import load_dotenv
+#   import os, yaml
+#   load_dotenv()
+#   raw = yaml.safe_load(open("config/paths.yaml"))
+#   # 然后用 os.path.expandvars 展开 ${DATA_ROOT}
+# ============================================================
+
+# 数据根目录（由 .env 中 DATA_ROOT 注入）
+data_root: "${DATA_ROOT}"
+
+# ── 原始数据输入 ────────────────────────────────────────────
+raw:
+  energy:        "${DATA_ROOT}/1-能源数据"
+  bldg_height:   "${DATA_ROOT}/2-建筑高度数据"
+  nightlight:    "${DATA_ROOT}/3-夜光数据"
+  population:    "${DATA_ROOT}/4-人口数据"
+  edgar:         "${DATA_ROOT}/5-EDGAR"
+  poi:           "${DATA_ROOT}/6-POI数据"
+  kg:            "${DATA_ROOT}/7-知识图谱"
+  blocks:        "${DATA_ROOT}/8-街区数据"
+  buildings:     "${DATA_ROOT}/9-建筑物数据"
+  labels:        "${DATA_ROOT}/10-街区能耗标签"
+  satellite:     "${DATA_ROOT}/11-卫星数据"
+  streetview:    "${DATA_ROOT}/12-街景文件"
+  splits:        "${DATA_ROOT}/13-训练测试验证集"
+  pretrained:    "${DATA_ROOT}/14-预训练文件"
+  rs_raw:        "${DATA_ROOT}/15-遥感影像"
+  code_ref:      "${DATA_ROOT}/888-代码"
+
+# ── 输出目录 ────────────────────────────────────────────────
+outputs:
+  root:          "${DATA_ROOT}/999-输出成果文件"
+  check:         "${DATA_ROOT}/999-输出成果文件/00-数据检查报告"
+  preproc:       "${DATA_ROOT}/999-输出成果文件/01-预处理中间件"
+  stage1:        "${DATA_ROOT}/999-输出成果文件/02-Stage1预训练权重"
+  stage2:        "${DATA_ROOT}/999-输出成果文件/03-Stage2下游结果"
+  vis:           "${DATA_ROOT}/999-输出成果文件/04-可视化"
+  summary:       "${DATA_ROOT}/999-输出成果文件/05-最终对比表"
