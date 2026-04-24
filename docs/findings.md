@@ -15,8 +15,8 @@
 1. **项目性质**: 把 KnowCL (纽约社经预测) 迁移到沈阳**街区能耗回归**, 核心贡献 = 把基础 KG 扩成 bldg-UKG.
 2. **精度等级目标** (必须做出): `SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI`.
 3. **数据在** `G:\Knowcl\1-* ... 15-*`, 输出固定到 `G:\Knowcl\999-输出成果文件\<编号>-*`.
-4. **论文继承的硬数字** (见 § 3): 嵌入维度 64, CompGCN + TuckER 初始化, 对称 InfoNCE, 标签 log1p.
-5. **可移植性是硬约束**: 代码不准出现 `G:\` 绝对路径, 一律从 `config/paths.yaml` 派生.
+4. **论文继承的硬数字** (见 § 2): 嵌入维度 64, CompGCN + TuckER 初始化, 对称点积 InfoNCE, 标签 log1p.
+5. **⚠️ 核心样本量约束**: SV 空间 join 后仅覆盖 208 个街区, 主实验用 208-block 子集划分 (见 § 4.1), **不是 757**.
 
 ---
 
@@ -56,14 +56,14 @@
   \]
   \(\phi\) 可以是元素乘 / 加; `dir(r)` 区分 in/out/self-loop.
 - **Visual Encoder**: ResNet (论文原用 ResNet-18; 本项目扩到 7 backbone).
-  - SV 多图: 每 region 平均 `1/n Σ ResNet(img_i)`.
+  - SV 多图: 每 region 平均 \(\frac{1}{n}\sum_i \text{ResNet}(\text{img}_i)\).
 - **两个投影头** (各为 2-layer MLP + ReLU): 把 KG emb 和 image emb 投到同一 128 维空间.
 - **对称 InfoNCE loss**:
   \[
   \mathcal{L}_a = -\log \frac{\exp(\mathrm{sim}(\tilde{I}_a, \tilde{e}_a))}{\sum_i \exp(\mathrm{sim}(\tilde{I}_a, \tilde{e}_i))}
           -\log \frac{\exp(\mathrm{sim}(\tilde{e}_a, \tilde{I}_a))}{\sum_i \exp(\mathrm{sim}(\tilde{e}_a, \tilde{I}_i))}
   \]
-  其中 `sim(·)` 是点积 (注意**不是** cosine).
+  其中 `sim(·)` 是**点积** (注意不是 cosine).
 - **TuckER 预训练初始化** KG 实体/关系 embedding (论文 § 4.3.1 末句).
 
 ### § 2.4 数据规模 (纽约子集, 作为参考)
@@ -90,7 +90,7 @@
 | 下游 MLP lr | 搜 {5e-4, 1e-3, 5e-3} |
 | 下游 Dropout | 搜 {0.1, 0.3, 0.5} |
 
-### § 2.6 在纽约数据上的基准数字 (我们要超越这个)
+### § 2.6 在纽约数据上的基准数字 (我们要超越)
 - SI, crime prediction: R² = 0.536 (KnowCL) vs 0.434 (PG-SimCLR)
 - SV, population prediction: R² = 0.377 (KnowCL) vs 0.283 (PG-SimCLR)
 - 最重要结论: 不同城市、不同指标对 SV/SI 的偏好不同 (论文 § 5.2 倒数第二段)
@@ -124,73 +124,103 @@
 - [ ] 依赖是否 pin 版本?
 - [ ] GPU 代码是否 `torch.cuda.is_available()` 保护?
 
-### § 3.5 划分戒律
-- 按 `block_id` 划 6:2:2, **不按图像级**.
-- 划分文件 (`splits/train.txt` 等) 冻结后**不得动**. 要调实验, 只改超参.
-- 所有实验共用**同一份**划分, 保证互相可比.
+### § 3.5 划分戒律 (2026-04-24 更新)
+- **主实验集 (208-block)**: SV ∩ label ∩ KG 的 208 个街区, 重新 6:2:2 划分 ≈ 125/41/42.
+  这是 E1/E2/E3/E4/E5/E6 六个实验的**统一比较基准**, 保证指标可比.
+- **全量集 (757-block)**: KG/SI 覆盖全部 757 个街区. 可用于 E3/E4 的灵敏度分析.
+- 两份划分文件分别冻结后**不得动**. 要调实验, 只改超参.
+- ~~按 `block_id` 划 6:2:2, 共用同一份划分~~ → **已废弃**: SV 只覆盖 208 块, 不能和 757-block 划分共用. 见 § 4.1.
 
 ---
 
-## § 4. 数据事实 (Phase 1 检测后填入, 现在全部待填)
+## § 4. 数据事实 (Phase 1 检测完成, 2026-04-24 填入)
 
-> 跑完 `scripts/check_data.py` 后, 从 `data_check_report.md` 抄到这里.
+> 来源: `scripts/check_data.py` 输出的 `data_check_report.md` 和 `data_check_summary.json`.
 
 ### § 4.1 规模
-- 街区总数 (8-街区数据): `____`
-- 建筑物总数 (9-建筑物数据): `____`
-- 能耗标签覆盖的街区数 (10-街区能耗标签): `____`
-- 三模态精确交集 (label ∩ SV ∩ SI ∩ building): `____` ← **决定样本量**
-- 街景图总数 (12): `____`
-- 街景 per-block min/median/max: `___/___/___` ← 决定是否能坚持原文 ≥ 40 阈值
-- 卫星图总数 (11): `____`, 单张分辨率: `____`
-- KG 三元组 / 实体 / 关系: `___ / ___ / ___`
+
+- [2026-04-24] 街区总数 (沈阳L4.shp, 8-街区数据): **757**. 来源: data_check_report C04. 影响: KG/SI 实验最大样本量上限.
+- [2026-04-24] 建筑物总数 (主文件 processed_shenyang20230318.shp): **153,428** 栋; 三环版 (沈阳建筑物三环.shp): 87,163 栋; 旧版 (沈阳建筑物.shp): 132,184 栋 (无高度字段, 不用). 来源: data_check_report C05. 影响: Phase 3 KG 扩展选主文件.
+- [2026-04-24] 能耗标签覆盖街区数: **757** (全覆盖, 与 label 完全对齐). 来源: data_check_report C03. 影响: 标签不是瓶颈.
+- [2026-04-24] KG Region 实体数: **757** (与街区完全对齐). 来源: data_check_report C09. 影响: KG 不是瓶颈.
+- [2026-04-24] **⚠️ SV 空间 join 覆盖街区数: 208** (CSV 79163 条点记录经纬度空间 join 到 沈阳L4.shp 后结果). 原始 CSV block_id 列覆盖 1225 个 ID (含大量不在 757 块内的 ID), 直接匹配 label 仅 174 块. 来源: data_check_report C06 + data_check_summary.json. 影响: **SV 实验 (E1/E5) 样本量上限 = 208, 远低于 500 的建模阈值, 是本项目最大瓶颈**.
+- [2026-04-24] SI (15-遥感影像) 文件数: **757 张 PNG** (每块一张, 已预裁切). 11-卫星数据 下有 1 张大 TIF (16896×15360px, 4 波段, EPSG:3857) 作为原图备用. 来源: data_check_report C02/C07. 影响: SI 覆盖 757 块, 不是瓶颈.
+- [2026-04-24] 街景图总数 (平铺): **203,452 张 JPG**. CSV 映射表有 79,163 条坐标记录. 按空间 join 后, 208 个街区内每块 min=1, median=42, max=1,837. 来源: data_check_summary.json. 影响: 空间 join 是唯一可靠的 SV-block 对应方式, 不能依赖 CSV 原始 block_id 列.
+- [2026-04-24] KG 三元组 / 实体 / 关系: **852,324 / 273,348 / 15**. 来源: data_check_report C09. 影响: 关系数 15 在 CompGCN 参数可承受范围内 (< 20 阈值).
+- [2026-04-24] 建筑-街区空间关联: 689/757 个街区有建筑物, 68 个街区无建筑. 每块中位数 40 栋, 最多 3,217 栋. 来源: data_check_report C12. 影响: Phase 3 KG 扩展时 68 个无建筑街区的 Building 实体为空, 需特殊处理.
+- [2026-04-24] **三模态精确交集 (label ∩ KG ∩ SV_spatial) = 208**. 与 SI 交集 = 208 (SI 覆盖全 757 块, 不减少). 来源: data_check_summary.json multimodal_intersection_recommended. 影响: 主实验样本量 208, 需重新对这 208 块做 6:2:2 划分 (≈125/41/42).
 
 ### § 4.2 标签
-- 能耗列名 (主 label): `____`
-- 单位: `____` (kWh? MJ? GJ/m²? 年? 月?)
-- 统计: mean=`___`, median=`___`, skew=`___`, kurt=`___`, zero_ratio=`___`
-- 决策: skew > 3 强制 log1p; zero_ratio > 30% 需与业务核对是否是"真零"还是"缺失"
+
+- [2026-04-24] 能耗列名: **energy**. 来源: shenyang_region2allinfo.json 列名. 影响: 所有代码中 label 列名写死为 "energy".
+- [2026-04-24] 标签来源链: 原始栅格 `1-能源数据/ec_2017sy.tif` → 用户按 沈阳L4.shp 街区聚合 → `10-街区能耗标签/shenyang_region2allinfo.json` (JSON dict-of-dict, 顶层 key = block_id). 来源: 用户告知. 影响: Phase 2 label 读取模块必须解析 JSON dict-of-dict 格式.
+- [2026-04-24] 能耗单位: **待确认** (原始栅格 ec_2017sy.tif 需查元数据; 推测为 MJ 或 kWh/m²/年). 来源: 用户未告知. 影响: 论文写作时需准确写单位; 不影响建模流程.
+- [2026-04-24] 统计: mean=10.666, median=7.765, std=9.920, skew=1.16, zero_ratio=0%, min=0.0016, max=45.634. 来源: data_check_summary.json label_col_energy_*. 影响: skew=1.16 < 3, log1p 可用但非强制; zero_ratio=0% 无假零问题.
+- [2026-04-24] 标签 block_id 格式: `Region_N` (如 Region_1, Region_10 …). JSON 顶层 key 即为 block_id, 与 KG Region 实体 ID 格式完全一致 (直接匹配, 无需转换). 来源: data_check_summary.json label_id_preview + kg_region_preview 对比. 影响: Phase 2 block_index.py 直接用 Region_N 格式作为主键.
 
 ### § 4.3 空间
-- 街区 shp CRS: `____`
-- 建筑 shp CRS: `____`
-- 卫星瓦片 CRS: `____`
-- 是否存在 CRS 不一致: `____`
+
+- [2026-04-24] 街区 shp CRS: **EPSG:4326** (沈阳L4.shp). 来源: data_check_report C04. 影响: 存储层标准, 空间计算前需转 32651.
+- [2026-04-24] 主建筑 shp CRS: **EPSG:3857** (processed_shenyang20230318.shp). 来源: data_check_report C05. 影响: 与街区 join 前需统一 CRS.
+- [2026-04-24] 卫星大图 CRS: **EPSG:3857**; SI PNG 裁图 CRS: 待确认 (推测同为 3857). 来源: data_check_report C07. 影响: Phase 2 裁图脚本需 reproject.
+- [2026-04-24] CRS 不一致: 街区=4326, 建筑/卫星=3857. 所有空间计算统一用 **EPSG:32651** 作为中间层. 来源: data_check_report C11. 影响: 所有 geopandas 操作加 `.to_crs(32651)`.
 
 ### § 4.4 划分
-- `13-训练测试验证集` 里文件清单: `____`
-- train/val/test 样本数: `___ / ___ / ___`
-- 泄漏检查结果 (三两两交集): `____`
+
+- [2026-04-24] 现有划分文件: `shenyang_zl15_train.csv` (529块) / `shenyang_zl15_valid.csv` (114块) / `shenyang_zl15_test.csv` (114块), 共 757 块, 比例 70%/15%/15%. 无泄漏. 来源: data_check_report C08. 影响: 此划分用于 KG/SI-only 灵敏度实验; 主实验另建 208-block 划分.
+- [2026-04-24] **主实验需新建 208-block 划分**: 在 208 个 SV-spatial 街区内重新 6:2:2 随机分层 → train≈125 / val≈41 / test≈42. 来源: 本次分析决策. 影响: Phase 1 收尾任务, make_block_whitelist.py 生成此划分.
 
 ---
 
-## § 5. KG 扩展设计 (Phase 3, 先列候选, 实装前再筛)
+## § 5. KG 已有关系详情 (来自 complete_knowledge_graph.txt + base_brand_knowledge_graph.txt)
 
-### § 5.1 新增实体
-| 类型 | 来源 | 键 | 属性候选 |
+### § 5.1 沈阳 KG 现有 15 种关系
+
+- [2026-04-24] 关系明细如下. 来源: data_check_report C09. 影响: Phase 3 扩展时选择补充哪些关系, 避免与现有重复.
+
+| 关系 | 三元组数 | 说明 |
+|---|---|---|
+| `cateOf` | 365,708 | POI → Category |
+| `locateAt` | 221,816 | POI → Region |
+| `buildingFunction` | 87,163 | Building → FunctionType |
+| `belongsToLand` | 87,055 | Building → Land |
+| `similarFunction` | 38,758 | Region → Region |
+| `nearBy` | 23,700 | Region → Region |
+| `RelatedBrand` | 10,026 | POI → Brand |
+| `flowTransition` | 7,590 | Region → Region |
+| `orientation` | 2,187 | Region → OrientationType |
+| `belongsToRegion` | 2,187 | Land → Region |
+| `landFunction` | 2,187 | Land → FunctionType |
+| `morphology` | 2,187 | Region → MorphologyType |
+| `brandOf` | 998 | Brand → Category |
+| `lowPopulationDensity` | 496 | Region → (标签类) |
+| `highPopulationDensity` | 266 | Region → (标签类) |
+
+### § 5.2 实体类型分布
+
+| 实体类型前缀 | 头+尾出现次数 |
+|---|---|
+| POI | 587,524 |
+| Cate1 | 366,706 |
+| Region | 365,623 |
+| Building | 174,218 |
+| Land | 95,803 |
+| (无前缀/原始) | 93,724 |
+| Brand | 21,050 |
+
+### § 5.3 KG 扩展候选关系 (Phase 3, 最终选 3-5 种)
+
+现有 KG 已含 `buildingFunction` / `belongsToLand`, 扩展时**不重复**:
+
+| 候选关系 | 头-尾 | 语义 | 优先级 |
 |---|---|---|---|
-| `Building` | 9-建筑物数据 | building_id | height, type, footprint_area, floors |
-| `Plot` | 8-街区数据 / 9- | plot_id (或从 shp 生成) | land_use, area, FAR |
+| `buildingHeight` | Building → HeightBin | 高度分档 (低/中/高层) | 高 |
+| `buildingAge` | Building → AgeBin | 建造年代分档 | 中 |
+| `buildingIn` | Building → Region | 建筑落在街区 (空间 join) | 高 |
+| `adjacentBuilding` | Building → Building | 距离 ≤ 15m 邻接 | 低 (三元组数量爆炸风险) |
+| `landArea` | Land → AreaBin | 地块面积分档 | 中 |
 
-### § 5.2 新增关系 (候选, 最终选 5-8 种)
-| 关系 | 头-尾 | 语义 | 备注 |
-|---|---|---|---|
-| `buildingIn` | Building → Region | 建筑落在街区 | 必加 |
-| `plotIn` | Plot → Region | 地块属于街区 | 若 plot ≠ region |
-| `buildingOn` | Building → Plot | 建筑坐落地块 | |
-| `adjacentBuilding` | Building → Building | 距离 ≤ 10m 的邻接建筑 | |
-| `sameType` | Building → Building | 同功能类型 | |
-| `heightRange` | Building → HeightBin | 高度分档 | 新增 Category 子类 `HeightBin`? |
-| `majorUse` | Plot → LandUseCategory | 地块主要用途 | |
-
-### § 5.3 反向边
-原 KnowCL 对每种关系加反向 (`~locateAt` 之类). 我们保持同一约定.
-
-### § 5.4 关系数量监控
-- 原纽约版 \|R\|=6, 北京/上海 =10.
-- 本项目扩展后预期 \|R\| = 10-15. **超过 20 就要警惕** — CompGCN 参数 O(\|R\|·d²) 会爆.
-
-来源: KnowCL 论文 Table 1 + 附录 A.1. 影响: Phase 3.
+- [2026-04-24] 注意: 现有 KG `belongsToLand` 已把建筑连到地块, `locateAt` 已把 POI 连到 Region. 最关键的缺口是 **建筑直接连到 Region** (`buildingIn`) 和**建筑高度属性** (`buildingHeight`). 来源: 本次关系明细分析. 影响: Phase 3 优先实现这两种关系.
 
 ---
 
@@ -209,7 +239,7 @@
 | 版本控制 | git | | |
 | 可视化 | matplotlib + seaborn + UMAP | | |
 
-**决定硬件**: `____` (Phase 0 会话时用户告诉 Claude)
+**决定硬件**: `____` (用户尚未告知 GPU 型号).
 
 来源: 此项目规划会话. 影响: Phase 0 `requirements.txt`.
 
@@ -242,17 +272,14 @@
 
 ## § 8. Git 资源片段
 
-### § 8.1 `.gitignore` 模板 (Phase 0 用)
+### § 8.1 `.gitignore` 模板
 ```gitignore
-# 数据 (在 G:\ 或任何 DATA_ROOT, 绝不入库)
 data/
 999-输出成果文件/
 **/01-预处理中间件/
 **/02-Stage1预训练权重/
 **/03-Stage2下游结果/
 **/04-可视化/
-
-# 模型权重
 *.pt
 *.pth
 *.ckpt
@@ -261,89 +288,51 @@ data/
 *.npz
 *.npy
 *.pkl
-
-# 环境
 .env
 .venv/
 venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
-
-# IDE
 .idea/
 .vscode/
 *.swp
-
-# 系统
 .DS_Store
 Thumbs.db
-
-# 日志
 *.log
 logs/
 wandb/
 mlruns/
 tensorboard/
-
-# 白名单例外
 !results/experiments.csv
 !configs/**/*.yaml
+!config/**/*.yaml
 !.env.example
 ```
 
 ### § 8.2 `.env.example` 模板
 ```dotenv
-# 复制为 .env 并填入本机实际路径
-# Windows: DATA_ROOT=G:/Knowcl  (正斜杠, 避免转义)
+# Windows: DATA_ROOT=G:/Knowcl
 # Linux/Mac: DATA_ROOT=/data/knowcl
 DATA_ROOT=
 ```
 
 ### § 8.3 `config/paths.yaml` 骨架
-```yaml
-# 所有路径都从 DATA_ROOT 派生, 不要再硬编码下面任何一行的前缀
-data_root: ${DATA_ROOT}
-
-raw:
-  energy:       ${data_root}/1-能源数据
-  bldg_height:  ${data_root}/2-建筑高度数据
-  nightlight:   ${data_root}/3-夜光数据
-  population:   ${data_root}/4-人口数据
-  edgar:        ${data_root}/5-EDGAR
-  poi:          ${data_root}/6-POI数据
-  kg:           ${data_root}/7-知识图谱
-  blocks:       ${data_root}/8-街区数据
-  buildings:    ${data_root}/9-建筑物数据
-  labels:       ${data_root}/10-街区能耗标签
-  satellite:    ${data_root}/11-卫星数据
-  streetview:   ${data_root}/12-街景文件
-  splits:       ${data_root}/13-训练测试验证集
-  pretrained:   ${data_root}/14-预训练文件
-  rs_raw:       ${data_root}/15-遥感影像
-
-outputs:
-  root:         ${data_root}/999-输出成果文件
-  check:        ${outputs.root}/00-数据检查报告
-  preproc:      ${outputs.root}/01-预处理中间件
-  stage1:       ${outputs.root}/02-Stage1预训练权重
-  stage2:       ${outputs.root}/03-Stage2下游结果
-  vis:          ${outputs.root}/04-可视化
-  summary:      ${outputs.root}/05-最终对比表
-```
-
-> 使用时: 读 `.env` 取 `DATA_ROOT`, 用 `os.path.expandvars` 或 python-dotenv + jinja 展开.
+见项目文件 `config/paths.yaml`.
 
 ---
 
-## § 9. 研究过程中的新发现 (2-Action Rule 的落点, 历次会话 append)
+## § 9. 研究过程中的新发现 (2-Action Rule 落点, 历次会话 append)
 
 > 每条新条目**必须**有日期、来源、影响三个字段.
-> 写在这一节, 不要散落到其他地方.
 
 - [2026-04-23] planning-with-files skill 由 OthmanAdi 维护, 核心是 3 份 md + 4 个 hook + 2-Action Rule + 5-Question Reboot Test. 来源: github.com/OthmanAdi/planning-with-files. 影响: 本项目协作协议整体采用.
 - [2026-04-23] KnowCL 论文确认 Semantic Encoder 是 CompGCN 而不是普通 GCN, 且用 TuckER 做 embedding 初始化. 来源: arXiv 2302.13094 § 4.3.1. 影响: Phase 5, 6 实现时必须用 `dgl.nn.CompGraphConv` 或等价实现.
 - [2026-04-23] KnowCL 的 InfoNCE 相似度是**点积**不是 cosine (论文式 (5) 下方). 来源: arXiv 2302.13094 § 4.4. 影响: 写 `info_nce.py` 时别想当然换 cosine.
-- [2026-04-23] KnowCL batch size: SI=128, SV=16 (不对称, 因 SV 每 region 多图, 有效样本本来就小). 来源: 论文 README 命令行. 影响: Phase 6 初值.
-- [2026-04-23] 原 KnowCL 每 region 需 ≥ 40 张街景才纳入. 沈阳数据可能达不到, 需 Phase 1 数据检查后决定是否放宽. 来源: 论文 § 5.1.1. 影响: Phase 1 的 blocking issue.
--
+- [2026-04-23] KnowCL batch size: SI=128, SV=16 (不对称). 来源: 论文 README 命令行. 影响: Phase 6 初值.
+- [2026-04-23] 原 KnowCL 每 region 需 ≥ 40 张街景才纳入. 沈阳 SV 空间 join 后 208 个街区中位数 42, 满足条件. 来源: 论文 § 5.1.1 + data_check_summary.json. 影响: 中位数达标, 但 min=1 说明有极少图的街区, make_block_whitelist.py 用 min_sv_imgs=10 过滤.
+- [2026-04-24] check_data.py 完成 C01-C13 共 13 项检查, 新增 C12 建筑-街区空间 join、C13 标签-KG 对齐检查. 来源: 本次编写. 影响: Phase 1 诊断结果全面可信.
+- [2026-04-24] 标签数据链: `1-能源数据/ec_2017sy.tif` → 用户按街区聚合 → `10-街区能耗标签/shenyang_region2allinfo.json` (dict-of-dict, key=block_id). 来源: 用户告知. 影响: Phase 2 `block_index.py` 读标签直接 `json.load` 然后 `raw[block_id]["energy"]`.
+- [2026-04-24] `15-遥感影像` 下已有 **757 张 per-block PNG**, 说明 SI 模态已预裁切完毕. 和 `11-卫星数据` 下的大 TIF 是两份不同粒度的同一数据. 来源: data_check_summary.json aux_rs_raw_file_count=757. 影响: Phase 2 SI dataloader 直接读 `15-遥感影像/<block_id>.png`, 无需再裁切大图.
+- [2026-04-24] 沈阳 KG 已包含 `buildingFunction` 和 `belongsToLand` 两种建筑相关关系. Phase 3 扩展只需补 `buildingIn`(Building→Region) 和 `buildingHeight`(Building→HeightBin) 即可形成完整 bldg-UKG. 来源: data_check_report C09 关系明细. 影响: Phase 3 工作量大幅减少, 不需要从零构建建筑关系.
+- [2026-04-24] SV CSV 中 `街区ID` 列内容为 `Region_0`, `Region_1001` 等, 其中大量 ID 不在 沈阳L4.shp 的 757 个 BlockID 内 (1225 vs 757). 正确做法是用经纬度空间 join, 忽略 CSV 原始 block_id 列. 来源: data_check_summary.json streetview_raw_block_count=1225 vs main_block_count=757. 影响: Phase 2 `block_index.py` SV 路径查找必须基于空间 join 结果, 不能信任 CSV 的 `街区ID` 列.

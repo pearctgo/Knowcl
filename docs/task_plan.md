@@ -16,165 +16,183 @@
 
 指标: R² / RMSE / MAE / MAPE, log1p 空间和原空间都报.
 
-副目标 (均需保障):
+副目标:
 - **可移植**: 任何机器 `clone → pip install → edit .env → run`, 不出硬编码路径.
 - **可续接**: 任何新对话用 `CLAUDE.md § 6` 模板开场即可续.
 - **可复现**: 每次实验一行写进 `results/experiments.csv`, 含 git commit hash.
 
 ---
 
-## 目录结构约定 (Phase 0 冻结后填入)
+## 实验列表 (6 个, 均在 208-block 主实验集上比较)
+
+| 实验ID | 模态 | KG | 说明 |
+|---|---|---|---|
+| E1 | SV (街景) | 无 | 纯视觉 baseline |
+| E2 | SI (遥感) | 无 | 纯遥感 baseline |
+| E3 | 无图像 | base-KG | KG-only baseline |
+| E4 | 无图像 | bldg-UKG | 扩展 KG baseline |
+| E5 | SV | bldg-UKG | KnowCL Stage1+2 (街景版) |
+| E6 | SI | bldg-UKG | KnowCL Stage1+2 (遥感版) |
+
+每个实验跑 7 个 visual backbone (ResNet-50 / ConvNeXt / DenseNet121 / ViT / MobileNetV3 / AttentionCNN / EfficientNet).
+
+---
+
+## 目录结构约定
 
 ```
 shenyang-energy-kg/              ← 代码仓库, 入 Git
-├── .env.example                 ← DATA_ROOT= 占位
+├── .env.example
 ├── .gitignore
-├── README.md                    ← 3 步安装说明
-├── requirements.txt             ← pin 版本
+├── README.md
+├── requirements.txt
 ├── config/
-│   ├── paths.yaml               ← 派生所有路径 (依赖 .env 的 DATA_ROOT)
-│   └── experiments/             ← 每个实验一个 yaml
+│   ├── paths.yaml
+│   └── experiments/
 │       ├── e1_sv_resnet50.yaml
 │       └── ...
 ├── docs/
-│   ├── CLAUDE.md                ← 规则
-│   ├── task_plan.md             ← 本文件
-│   ├── findings.md              ← 知识
-│   ├── progress.md              ← 流水
-│   └── CONV_NOTES/              ← 每次对话摘要存档 (可选)
-├── src/                         ← 等 Phase 2 之后再细分
+│   ├── CLAUDE.md
+│   ├── task_plan.md
+│   ├── findings.md
+│   └── progress.md
 ├── scripts/
-│   ├── check_data.py            ← Phase 1 已产出
+│   ├── check_data.py            ← Phase 1, 13 项检查 C01-C13
+│   ├── make_block_whitelist.py  ← Phase 1 收尾, 生成 whitelist
 │   ├── setup.sh
 │   └── setup.bat
+├── src/
+│   ├── utils/
+│   │   ├── label_transform.py   ← log1p/expm1
+│   │   └── metrics.py           ← RMSE/MAE/MAPE/R², MetricsLogger
+│   ├── datasets/                ← Phase 2 填充
+│   ├── models/                  ← Phase 4-5 填充
+│   ├── losses/                  ← Phase 6 填充
+│   └── engine/                  ← Phase 4-6 填充
 ├── results/
-│   └── experiments.csv          ← 入 Git, 主汇总表
-└── tests/                       ← 可选
+│   └── experiments.csv
+└── tests/
 
-<DATA_ROOT>/                     ← 用户自己的数据根, 不入 Git
+<DATA_ROOT>/
 ├── 1-能源数据/ ... 15-遥感影像/
 └── 999-输出成果文件/
     ├── 00-数据检查报告/
+    │   ├── data_check_report.md
+    │   └── data_check_summary.json
     ├── 01-预处理中间件/
+    │   ├── block_whitelist.csv          ← 208-block 主实验集 + 划分
+    │   └── sv_spatial_join.csv          ← 街景坐标空间 join 结果
     ├── 02-Stage1预训练权重/
     ├── 03-Stage2下游结果/
     ├── 04-可视化/
     └── 05-最终对比表/
 ```
 
-> `src/` 内部目录 **刻意不定**. 看完数据、Phase 2 实现 `block_index` 后再决定细分方式.
-
 ---
 
 ## Phases
 
-### ▶ Phase 0 · 可移植项目骨架
-**目的**: 使项目从 day 1 起就是"别的电脑也能直接跑".
-- [ ] 新建本地代码仓库目录 (**与数据目录分离**, 如 `D:\code\shenyang-energy-kg`)
-- [ ] 创建 `.env.example`, 内容为 `DATA_ROOT=G:/Knowcl` 这种占位行
-- [ ] 创建 `config/paths.yaml`, 所有子目录路径从 `${DATA_ROOT}` 派生
-- [ ] 写 `.gitignore` (模板在 `findings.md § .gitignore`)
-- [ ] 写 `requirements.txt`, 版本全部 pin
-- [ ] 写 `README.md`: 项目一句话 + 3 步安装
-- [ ] 写 `scripts/setup.sh` 和 `scripts/setup.bat` (创建 venv + pip install)
-- [ ] 把上一次产出的 `check_data.py` 挪进来, 改成读 `config/paths.yaml` 而不是硬编码 `G:\Knowcl`
-- [ ] `git init` + 首次 commit
-- [ ] 在 GitHub 建 Private 仓库 `shenyang-energy-kg`, push
-- [ ] 打 tag: `v0.0-scaffold`
-- **Status:** pending
-- **预计会话数:** 1-2
+### ✅ Phase 0 · 可移植项目骨架
+- [x] 新建本地代码仓库目录 (与数据目录分离)
+- [x] 创建 `.env.example`
+- [x] 创建 `config/paths.yaml`
+- [x] 写 `.gitignore`
+- [x] 写 `requirements.txt`
+- [x] 写 `README.md`
+- [x] 写 `scripts/setup.sh` 和 `scripts/setup.bat`
+- [x] 写 `scripts/check_data.py` (C01-C13, 从零编写)
+- [ ] `git init` + 首次 commit (用户执行)
+- [ ] 在 GitHub 建 Private 仓库并 push (用户执行)
+- [ ] 打 tag: `v0.0-scaffold` (用户执行)
+- **Status:** complete (代码产出完成, git 操作待用户执行)
+- **产出**: 9 个骨架文件 + check_data.py (C01-C13)
 
 ### ▶ Phase 1 · 数据诊断
-**目的**: 摸清真实数据长什么样, 填 `findings.md § 数据事实`.
-- [ ] 在目标机器 `python scripts/check_data.py` (借 `.env` 指向 `G:\Knowcl`)
-- [ ] 读 `G:\Knowcl\999-输出成果文件\00-数据检查报告\data_check_report.md`
-- [ ] 把报告数字填到 `findings.md § 数据事实` 每一格
-- [ ] 解决所有 blocking 问题:
-  - [ ] 划分泄漏 (交集 > 0 必须清零)
-  - [ ] 缺目录
-  - [ ] 标签偏度 (> 3 上 log1p) / 零值比 > 30% 核查
-  - [ ] CRS 不一致的图层统一方案
-- [ ] 精算三模态交集 (label ∩ SV ∩ SI ∩ building), 落到 `01-预处理中间件/block_whitelist.csv`
-- [ ] 若交集 < 500: **暂停建模, 扩数据**
+- [x] 运行 `python scripts/check_data.py` → `data_check_report.md` + `data_check_summary.json`
+- [x] 填写 `findings.md § 4` 所有数据事实
+- [x] 确认标签格式 (JSON dict-of-dict) + 能耗列名 (energy)
+- [x] 确认划分文件无泄漏 (train ∩ val ∩ test = 0)
+- [x] 确认 KG Region 实体与 label block_id 完全对齐 (757/757)
+- [x] 确认 SI 已有 757 张 per-block PNG (15-遥感影像)
+- [x] 确认 SV 空间 join 覆盖 208 街区 (三模态交集 = 208, < 500 阈值)
+- [x] 确认 KG 已含 buildingFunction + belongsToLand, Phase 3 只需补 buildingIn + buildingHeight
+- [ ] **[blocking]** 运行 `make_block_whitelist.py` 生成 208-block 主实验集 + 6:2:2 划分
+- [ ] 确认 208-block 划分 (train≈125/val≈41/test≈42) 无泄漏
+- [ ] 将 208-block 划分写入标准文件 (`01-预处理中间件/block_whitelist.csv`)
 - **Status:** in_progress
-- **预计会话数:** 2-3
-- **产出**: `data_check_report.md` + `findings.md` 填空 + `block_whitelist.csv`
+- **预计会话数:** 1 (收尾)
+- **产出**: `block_whitelist.csv`, `findings.md § 4` 全部填完
 
 ### ▶ Phase 2 · 流水线基石
-**目的**: 所有模型共用的"地基", 保证跨模态对齐 + 防泄漏.
-- [ ] `src/datasets/block_index.py`: 给定 `block_id`, 返回该街区的 SV 路径列表 / SI 路径 / KG 子图 / label
-- [ ] `src/datasets/splits.py`: 基于 `block_whitelist.csv` 冻结 6:2:2 split, 落盘
-- [ ] `src/utils/label_transform.py`: `y_train = log1p(y)`, `y_hat = expm1(pred)`
-- [ ] `src/utils/metrics.py`: RMSE/MAE/MAPE/R² 统一实现, **log 和 raw 空间都报**
-- [ ] 单元测试 (tests/): 随机抽 20 个 block, 验证 block_index 返回的文件都存在
-- [ ] 所有路径经 `config/paths.yaml`
-- **Status:** pending
-- **预计会话数:** 3-4
-- **依赖**: Phase 1 完成
-
-### ▶ Phase 3 · KG 扩展 (base → bldg-UKG)
-**目的**: 在 `7-知识图谱` 的基础上, 追加 building / plot 实体和边.
-- [ ] 读 `findings.md § KG 关系清单`, 确认新加的 5-10 种关系
-- [ ] `src/kg/build_bldg_ukg.py`:
-  - 从 `9-建筑物数据` 抽 building 实体 + 属性 (高度, 类型, 面积)
-  - 从 `8-街区数据` 抽 plot 实体 (若建筑数据含 plot_id)
-  - 生成新三元组: `(building, locatedIn, region)`, `(plot, adjacent, plot)` 等
-  - 合并原 KG + 新三元组, 输出 `triples_bldg_ukg.tsv` + `entity2id.txt` + `relation2id.txt`
-- [ ] 验证: 实体/关系/三元组统计, 度数分布, 与原 KG 的增量对比
-- [ ] 可视化: 随机抽 1 个 region, 画其 1-hop 子图
+- [ ] `src/datasets/block_index.py`: block_id → {sv_paths, si_path, label, split}
+  - SV: 基于空间 join 结果 (`sv_spatial_join.csv`) 查找图片路径
+  - SI: `15-遥感影像/<block_id>.png` (直接对应)
+  - label: `shenyang_region2allinfo.json` 读取 `raw[block_id]["energy"]`
+- [ ] `src/datasets/splits.py`: 读 `block_whitelist.csv`, 返回 train/val/test block_id 列表
+- [x] `src/utils/label_transform.py`: log1p/expm1 封装 (已完成)
+- [x] `src/utils/metrics.py`: RMSE/MAE/MAPE/R², MetricsLogger (已完成)
+- [ ] 单元测试: 随机抽 20 个 block, 验证 block_index 返回文件均存在
 - **Status:** pending
 - **预计会话数:** 2-3
+- **依赖**: Phase 1 block_whitelist.csv 生成
+
+### ▶ Phase 3 · KG 扩展 (base-KG → bldg-UKG)
+- [ ] 分析现有 KG 关系: `buildingFunction` (Building→Type) + `belongsToLand` (Building→Land) 已有
+- [ ] `src/kg/build_bldg_ukg.py`:
+  - 从 `processed_shenyang20230318.shp` 读 Height 字段 → 生成 `buildingHeight` (Building→HeightBin)
+  - 空间 join buildings ↔ 沈阳L4.shp → 生成 `buildingIn` (Building→Region)
+  - 合并到现有 KG → `complete_knowledge_graph_bldg.txt`
+- [ ] 验证: 新 KG 关系数 ≤ 20 (当前 15 + 扩展 2-3 = 17-18, 安全)
+- [ ] 可视化: 随机抽 1 个 region, 画其 1-hop 子图
+- **Status:** pending
+- **预计会话数:** 2
 - **依赖**: Phase 1, 2
-- **产出**: `01-预处理中间件/bldg_ukg/` 下完整 KG 文件
 
 ### ▶ Phase 4 · 单模态 Baselines (E1, E2)
-**目的**: 把最简单的两条路先跑通, 拿到 baseline 数字.
-- [ ] `src/models/single_backbone.py`: 统一封装 7 个 backbone 的 forward (输入 image, 输出 embedding)
-- [ ] `src/engine/train_supervised.py`: 直接 backbone → MLP → label
-- [ ] `config/experiments/e1_sv_resnet50.yaml`: 先跑通这一个
-- [ ] E1-resnet50 出第一个能读的 RMSE/R²
-- [ ] 补齐 E1 其余 6 backbone
-- [ ] E2 (遥感): 替换 backbone 为 SI 版配置, 跑全 7 个
-- [ ] 每跑完一个 append 一行到 `results/experiments.csv` + 一段到 `progress.md`
+- [ ] `src/models/single_backbone.py`: 7 backbone 统一封装
+- [ ] `src/engine/train_supervised.py`: backbone → MLP → label
+- [ ] E1 (SV): ResNet50 先跑通, 获得第一个 R²
+- [ ] E1 补全 7 backbone
+- [ ] E2 (SI): 替换为 15-遥感影像, 跑 7 backbone
 - **Status:** pending
-- **预计会话数:** 5-7 (每 backbone ≈ 一次对话)
+- **预计会话数:** 5-7
 - **依赖**: Phase 2
 
 ### ▶ Phase 5 · KG-only Baselines (E3, E4)
-- [ ] `src/models/compgcn.py`: 基于 dgl 实现 CompGCN (论文原版)
-- [ ] 用 TuckER 预训练嵌入初始化 (从 `findings.md § 关键数字` 查)
-- [ ] E3: 用 base-KG 训练, 得 region emb → MLP → label
-- [ ] E4: 用 bldg-UKG 训练, 同流程
+- [ ] `src/models/compgcn.py`: CompGCN (dgl 实现)
+- [ ] TuckER 预训练嵌入初始化 (读 14-预训练文件/*.npz)
+- [ ] E3: base-KG → region emb → MLP → energy
+- [ ] E4: bldg-UKG → 同流程
 - **Status:** pending
 - **预计会话数:** 3-4
 - **依赖**: Phase 3
 
-### ▶ Phase 6 · KnowCL Stage-1 对比预训练 (E5, E6 的上半段)
-- [ ] `src/losses/info_nce.py`: 对称 InfoNCE (Image→KG + KG→Image), `tau=0.07`
-- [ ] `src/models/pair_clip.py`: KnowCL 主模型, 两个 encoder + 两个 projection head
-- [ ] `src/engine/train_pretrain.py`: Stage 1 训练脚本
-- [ ] 跑通 E5 的 CompGCN + ResNet50 组合, 保存权重到 `02-Stage1预训练权重/`
-- [ ] 监控: InfoNCE loss 末端 < 1.0? alignment/uniformity 曲线?
-- [ ] 扩展到 E6 (SI)
+### ▶ Phase 6 · KnowCL Stage-1 对比预训练 (E5, E6 上半段)
+- [ ] `src/losses/info_nce.py`: 对称点积 InfoNCE, tau=0.07
+- [ ] `src/models/pair_clip.py`: KnowCL 主模型
+- [ ] `src/engine/train_pretrain.py`: Stage 1 脚本
+- [ ] E5 (SV+bldg-UKG): CompGCN + ResNet50 跑通
+- [ ] 监控: InfoNCE < 1.0? alignment/uniformity?
+- [ ] E6 (SI+bldg-UKG): 同流程
 - **Status:** pending
 - **预计会话数:** 4-6
 - **依赖**: Phase 3, 4, 5
 
-### ▶ Phase 7 · KnowCL Stage-2 下游回归 (E5, E6 的下半段)
-- [ ] `src/engine/train_downstream.py`: 加载 Stage-1 权重, 冻结 encoder, 训 MLP
-- [ ] E5 的 7 个 backbone 全跑
-- [ ] E6 的 7 个 backbone 全跑
-- [ ] 验证精度等级 (Goal 的 6 级不等式是否全部成立)
+### ▶ Phase 7 · KnowCL Stage-2 下游回归 (E5, E6 下半段)
+- [ ] `src/engine/train_downstream.py`
+- [ ] E5 7 backbone 全跑
+- [ ] E6 7 backbone 全跑
+- [ ] 验证 6 级精度不等式是否全部成立
 - **Status:** pending
 - **预计会话数:** 5-7
 - **依赖**: Phase 6
 
 ### ▶ Phase 8 · 消融、可视化、写作
-- [ ] 关系消融: bldg-UKG 去掉一类关系 (building / plot / flow) 再跑, 看 R² 变化
-- [ ] backbone 消融: 每种模态下 7 backbone 的对比图
-- [ ] UMAP embedding 可视化, 按能耗高低着色
-- [ ] 失败案例分析: |y - ŷ| > 3σ 的 block 画出来看
-- [ ] 最终 `results/experiments.csv` 汇总图表
+- [ ] 关系消融: 去掉 buildingIn / buildingHeight 分别跑
+- [ ] backbone 消融对比图
+- [ ] UMAP embedding 可视化 (按能耗着色)
+- [ ] 失败案例分析 (|y - ŷ| > 3σ)
+- [ ] 最终汇总图表
 - [ ] 论文/毕业设计写作
 - **Status:** pending
 - **预计会话数:** 5-8
@@ -182,44 +200,35 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 
 ---
 
-## Decisions Made (append-only 决策日志)
-
-> 每个重大选型**只决定一次**, 之后不再反复争论. 模板: `YYYY-MM-DD | 决策 | 原因 | Phase`.
+## Decisions Made (append-only)
 
 | 日期 | 决策 | 原因 | Phase |
 |---|---|---|---|
-| 2026-04-23 | 采用 planning-with-files 4 文件协议 | Manus 风格, 解决长对话上下文丢失 | - |
-| 2026-04-23 | 代码仓库与数据目录**物理分离** (`D:\code\` vs `G:\Knowcl\`) | 代码入 Git, 数据不入 | Phase 0 |
-| 2026-04-23 | 路径全部走 `config/paths.yaml` 派生自 `.env.DATA_ROOT` | 可移植性核心约束 | Phase 0 |
-| 2026-04-23 | 能耗标签 log1p 变换, 指标原/log 空间双报 | KnowCL 论文范式 + 长尾数据 | Phase 2 |
-| 2026-04-23 | 语义编码器用 CompGCN (非普通 GCN) + TuckER 初始化 | 继承 KnowCL 论文最优配置 | Phase 5, 6 |
-| 2026-04-23 | 划分按 region 级 6:2:2, 固化到 `block_whitelist.csv` | 所有实验可比性 + 防泄漏 | Phase 1, 2 
-| 2026-04-24 | 主建筑文件选 `processed_shenyang20230318.shp`（含 Height/Function/Age/Quality 字段） | 字段最完整，三环版也可备用 | Phase 3 |
-
-| | | | |
+| 2026-04-23 | 采用 planning-with-files 4 文件协议 | 解决长对话上下文丢失 | - |
+| 2026-04-23 | 代码仓库与数据目录物理分离 | 代码入 Git, 数据不入 | Phase 0 |
+| 2026-04-23 | 路径全部走 `config/paths.yaml` + `.env.DATA_ROOT` | 可移植性核心约束 | Phase 0 |
+| 2026-04-23 | 能耗标签 log1p 变换, 指标原/log 双空间报 | KnowCL 论文范式 + 长尾数据 | Phase 2 |
+| 2026-04-23 | 语义编码器用 CompGCN + TuckER 初始化 | 继承 KnowCL 论文最优配置 | Phase 5, 6 |
+| 2026-04-24 | 主建筑文件选 `processed_shenyang20230318.shp` (含 Height/Function/Age/Quality) | 字段最完整 | Phase 3 |
+| 2026-04-24 | SV 坐标用空间 join, 不信任 CSV `街区ID` 列 | 原始 CSV ID 有 1225 个不对应 757 块 | Phase 2 |
+| 2026-04-24 | **主实验采用 208-block 子集**, 在其内重新 6:2:2 划分 | SV 空间 join 只覆盖 208 块, 需统一比较基准 | Phase 1 收尾 |
+| 2026-04-24 | Phase 3 KG 扩展只补 `buildingIn` + `buildingHeight` 两种关系 | 现有 KG 已含 buildingFunction/belongsToLand, 只缺区级归属和高度 | Phase 3 |
+| 2026-04-24 | SI 数据使用 `15-遥感影像/*.png` (已预裁切), 不重新裁 11-卫星数据大 TIF | 757 张 PNG 已全覆盖, 无需重复处理 | Phase 2 |
 
 ---
 
-## Errors Encountered (append-only, 踩过不再踩)
-
-> 模板: `YYYY-MM-DD | 现象 | 根因 | 解法 | Phase`.
+## Errors Encountered (append-only)
 
 | 日期 | 现象 | 根因 | 解法 | Phase |
 |---|---|---|---|---|
-| (示例) | log 训练 loss NaN | `log(0)` | 改 `log1p` | - |
-| (示例) | val R² 为负 | train/val block_id 泄漏 | 按 region 重划 | - |
-| | | | | |
+| 2026-04-24 | check_data C03 未识别 JSON 标签文件 | 脚本只查找 CSV/Excel | 重写 C03 支持 JSON dict-of-dict 三种结构 | Phase 0 |
+| 2026-04-24 | check_data C08 未识别 shenyang_zl15_*.csv | 脚本只认 train.txt 固定名 | 重写 C08 兼容任意前缀命名, 自动检测 ID 列 | Phase 0 |
+| 2026-04-24 | SV 三模态交集仅 208 (< 500 阈值) | SV CSV 原始 block_id 与主街区 ID 体系不一致, 空间 join 才是正确匹配方式 | ① 用空间 join 结果定义 SV 覆盖范围; ② 主实验改用 208-block 子集; ③ 不直接训练, 先完成 Phase 1 收尾 | Phase 1 |
 
 ---
 
 ## 当前活动 Phase
 
-**现在**: 无 phase 在 `in_progress`. 下一步 → 新开对话做 **Phase 0**.
+**Phase 1 in_progress** — 最后一步: 运行 `make_block_whitelist.py` 生成 208-block 主实验集.
 
----
-
-## 实验汇总指针
-
-所有实验的详细结果在 `results/experiments.csv` (入 Git, 每次一行).
-最近 3 条结果在 `progress.md` 最新 3 条 session 里有引用.
-本文件 **不记录** 每次实验的具体数字 — 只记 phase 状态.
+下一个 Phase → **Phase 2 · 流水线基石** (block_index.py 是核心).
