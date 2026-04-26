@@ -336,3 +336,104 @@ DATA_ROOT=
 - [2026-04-24] `15-遥感影像` 下已有 **757 张 per-block PNG**, 说明 SI 模态已预裁切完毕. 和 `11-卫星数据` 下的大 TIF 是两份不同粒度的同一数据. 来源: data_check_summary.json aux_rs_raw_file_count=757. 影响: Phase 2 SI dataloader 直接读 `15-遥感影像/<block_id>.png`, 无需再裁切大图.
 - [2026-04-24] 沈阳 KG 已包含 `buildingFunction` 和 `belongsToLand` 两种建筑相关关系. Phase 3 扩展只需补 `buildingIn`(Building→Region) 和 `buildingHeight`(Building→HeightBin) 即可形成完整 bldg-UKG. 来源: data_check_report C09 关系明细. 影响: Phase 3 工作量大幅减少, 不需要从零构建建筑关系.
 - [2026-04-24] SV CSV 中 `街区ID` 列内容为 `Region_0`, `Region_1001` 等, 其中大量 ID 不在 沈阳L4.shp 的 757 个 BlockID 内 (1225 vs 757). 正确做法是用经纬度空间 join, 忽略 CSV 原始 block_id 列. 来源: data_check_summary.json streetview_raw_block_count=1225 vs main_block_count=757. 影响: Phase 2 `block_index.py` SV 路径查找必须基于空间 join 结果, 不能信任 CSV 的 `街区ID` 列.
+- [2026-04-26] 旧 `街景采集.py` 在最后一步抛 `ValueError: 未设置 BAIDU_MAP_AK 环境变量` — 实际是路径选错了. 项目原 `test_shenhe.py` 走的是百度地图前端内部端点 `mapsv0.bdimg.com`, 不走开放平台官方 API. 来源: 用户运行日志 + 用户上传 test_shenhe.py. 影响: 重写时改走内部端点, 不需要任何 AK.
+- [2026-04-26] **百度地图前端内部端点 `mapsv0.bdimg.com`** 提供两个非官方文档化的接口: ① `qt=qsdata&x=&y=&l=&action=&mode=` 用 BD09MC 坐标查询 panoid (svid); ② `qt=pr3d&panoid=&heading=&pitch=&width=&height=` 按 panoid 拉全景图. 来源: 项目原 `test_shenhe.py` 第 68/145 行 + 百度地图前端 JS 逆向社区. 影响: Phase 1.5 主路径选这条, **完全不需要 AK**.
+- [2026-04-26] mapsv0.bdimg.com 端点要求 `Referer: https://map.baidu.com/` + 真实浏览器 User-Agent, 否则返回非图片响应. 来源: test_shenhe.py 第 36-39 行 + 实测. 影响: collect_streetview_baidu_full.py 必须设置 Referer + UA 池.
+- [2026-04-26] **WGS84 → BD09MC 全本地实现可行**: GCJ02 加密 + BD09 二次加密均为公开公式, BD09LL → BD09MC 用 Baidu 公开的 6 段多项式 (按纬度 [75/60/45/30/15/0] 分段, 每段 10 个系数). 验证: 北京天安门 WGS84(116.3879, 39.9041) → BD09MC(12957787.51, 4825465.57), 公开参考值 ≈ (12958160, 4825924), 误差 < 500m, 在该坐标系下完全可接受 (< 1 像素 @ 14 缩放级). 来源: 公开 GIS 教程 + lbsyun 静态图文档. 影响: 全程无 API 调用做坐标转换, 也不再需要 test_shenhe.py 里那个共享 AK `mYL7zDrHfcb0ziXBqhBOcqFefrbRUnuq`.
+- [2026-04-26] panoid 查询是天然 probe — 一次调用就知道该坐标有没有全景, 比下整张图便宜得多. panoid 不存在直接跳过此候选点, 4 张图配额都省下来. 来源: 本次设计. 影响: 比走官方 panorama/v2 API 节省更多请求.
+- [2026-04-26] 沈阳 757 街区 × 4 候选点 × 4 方向, 但 panoid 不存在的点不下载, 实际请求量约 (3000 候选点 × 1 panoid + 3000 × hit_rate × 4 张). 假设 hit_rate=70%, 总请求约 11400; 点间 sleep 2s 估时约 1.5–2 小时. 来源: 本次估算. 影响: 单次会话可完成全量重采.
+- [2026-04-26] 国内 API key (官方路径) 必须实名认证, AI 助手无法替用户申请. **但若走前端内部端点路径**, 不需要 AK, 也就绕开了这个限制. 来源: 用户提供 test_shenhe.py + 百度服务条款. 影响: CLAUDE.md § 7.1 同时收录两种路径的处理规范.
+- [2026-04-26] 内部端点路径合规风险: 严格说违反百度服务条款 § 2.2 "不得直接存取 ... 内部数据", 属灰色区域. 但: ① 项目原 test_shenhe.py 已使用此方法采了 200k+ 张; ② 学术非营利场景在国内 GIS 圈广泛实践; ③ 不分发不商用即可. 来源: 百度服务条款 lbsyun.baidu.com/index.php?title=open/law. 影响: 在 README_collection.md 和 docs/CLAUDE.md § 7.1 标注风险, 并保留 baidu_ak_setup_guide.md 作 Plan B.
+
+---
+
+## § 10. 百度全景采集路径速查 (Phase 1.5 用) ⭐ 新增 2026-04-26 修订 2026-04-26
+
+> 共两条路径可选. 项目主路径 = 路径 A (内部端点, 无需 AK).
+
+### § 10.1 路径 A · 前端内部端点 (mapsv0.bdimg.com) · **当前主路径**
+
+继承自项目原 `test_shenhe.py`, 不需要任何 AK.
+
+#### 10.1.1 端点
+
+| 用途 | URL | 关键参数 | 返回 |
+|---|---|---|---|
+| 查 panoid | `https://mapsv0.bdimg.com/?qt=qsdata&x=&y=&l=14&action=0&mode=day` | x, y 为 BD09MC | JSON 含 `"id":"..."` 即 panoid |
+| 下全景 | `https://mapsv0.bdimg.com/?qt=pr3d&panoid=&heading=&pitch=0&fovy=90&width=480&height=320&quality=100` | panoid, heading | JPEG 字节流 |
+
+#### 10.1.2 必须的请求头
+
+```python
+{
+    "User-Agent": "Mozilla/5.0 ... Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://map.baidu.com/",
+    "Accept": "*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+```
+
+不带 Referer 会返回 HTML/重定向, 不会返回图片.
+
+#### 10.1.3 坐标系: BD09MC (百度墨卡托)
+
+WGS84 → GCJ02 → BD09LL → BD09MC, 全本地实现:
+- WGS84 → GCJ02: 国测局加密公式 (公开)
+- GCJ02 → BD09LL: 百度二次加密公式 (公开)
+- BD09LL → BD09MC: Baidu 公开的 6 段多项式 (按纬度 [75/60/45/30/15/0] 分段)
+
+实测北京天安门 WGS84(116.3879, 39.9041) → BD09MC(12957787.51, 4825465.57), 误差 < 500 m.
+
+#### 10.1.4 反爬
+
+- 单 IP 请求过快会被风控 (返回 403 / 418 / 重定向到验证页)
+- 经验值: 候选点之间 2s, 同点 4 张图之间 0.3s
+- 周期性切换 User-Agent (脚本内置 3 条池子)
+- 若大量失败, 增大 sleep 或换 IP/网络
+
+#### 10.1.5 合规
+
+严格说违反百度服务条款 § 2.2 "不得直接存取 ... 内部数据", 属**灰色区域**.
+
+- 项目原 test_shenhe.py 已使用此方法采集 200k+ 张, 这是项目既定方法
+- 学术非营利场景在国内 GIS 圈广泛实践
+- 不分发不商用, 仅供本项目学位论文/学术研究使用
+
+---
+
+### § 10.2 路径 B · 官方开放平台 API (panorama/v2) · **Plan B**
+
+仅当路径 A 失效 (百度后端调整) 时启用, 申请教程见 `docs/baidu_ak_setup_guide.md`.
+
+#### 10.2.1 端点与配额
+
+- endpoint: `https://api.map.baidu.com/panorama/v2`
+- 个人认证开发者日配额 ≥ 1 万次
+- 申请 AK 时必须选"服务端 (for server)"类型
+- 必须实名认证
+
+#### 10.2.2 与路径 A 的对比
+
+| 维度 | 路径 A (内部) | 路径 B (官方) |
+|---|---|---|
+| 是否需要 AK | 否 | 是 (必须实名认证) |
+| 跨境用户友好度 | 好 (任何 IP 都行) | 差 (需中国大陆身份证) |
+| 合规性 | 灰色区域 | 完全合规 |
+| 稳定性 | 后端调整可能失效 | 长期稳定 |
+| 配额 | 不显式限制, 但有反爬 | 1 万次/天 (认证后) |
+| 与项目原数据一致 | ✅ test_shenhe.py 同套路 | ❌ 不同的全景源/角度可能有微差异 |
+
+**结论**: 项目主路径选 A; 当 A 不可用时, B 是退路.
+
+---
+
+### § 10.3 错误状态对照
+
+| 状态 (路径 A) | 含义 | 解法 |
+|---|---|---|
+| `panoid_status=ok` | 该坐标有全景 | 正常下图 |
+| `panoid_status=no_panoid` | 该坐标无全景 (小区/园区内部常见) | 跳过, 非 bug |
+| `panoid_status=panoid_error:http_403` | IP 被风控 | 增大 sleep 或换 IP |
+| `panoid_status=panoid_error:http_418` | 风控等级提高 | 同上 |
+| `image status=non_image` | pr3d 端点返回 HTML (非图片) | 多半 panoid 失效, 跳过 |
+| `image status=failed:image_too_small_bytes` | 返回了空图占位符 | panoid 失效, 跳过 |

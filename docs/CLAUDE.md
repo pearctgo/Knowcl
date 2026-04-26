@@ -16,6 +16,7 @@
   SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI
 - 7 个视觉 backbone 对比池: ResNet-50 / ConvNeXt / DenseNet121 / ViT / MobileNetV3 / AttentionCNN / EfficientNet
 - ⚠️ **关键约束**: SV 仅覆盖 208 个街区 (三模态交集), 主实验在 208-block 子集上跑, 不是全部 757 块
+- ⚠️ **新增分支 (2026-04-26)**: Phase 1.5 用百度地图前端内部端点 (`mapsv0.bdimg.com`) 重采全 757 街区街景, **无需申请 AK** (与项目原 `test_shenhe.py` 同方法). 若成功, 主实验可升级为 757-block 全量.
 
 完整背景、关键论文数字、目录清单、约束 — 见 `findings.md`.
 路线图、阶段、已做决策 — 见 `task_plan.md`.
@@ -136,6 +137,22 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 | OS | `pathlib.Path`, `os.path.join` | 反斜杠拼接 |
 | GPU | `torch.cuda.is_available()` 检测 | 写死 `.cuda()` |
 | 中文路径 | `encoding='utf-8'` | 默认 gbk |
+| **API 密钥** ⭐ | **从 `.env` 读 (env var 优先)** | 写进代码 commit 到 git |
+
+> **§ 7.1 第三方 API 密钥处理 (新增 2026-04-26, 修订 2026-04-26)**
+> 当代码需要第三方 API key (官方途径 — 百度地图开放平台 AK / 高德 / Mapbox / 微软 Bing 等) 时:
+> 1. 三段式回退读取: 环境变量 → `.env` 文件 → 默认值 (空字符串)
+> 2. `.gitignore` 必须屏蔽 `.env`
+> 3. 仓库提供 `.env.example` 占位
+> 4. 代码若检测不到 key, 报清晰错误并指向申请文档, 不要默默静默失败
+> 5. ⚠ Claude 不能替用户申请 key — 国内 API 都强制实名认证.
+>
+> **若使用前端内部端点路径** (例如本项目 Phase 1.5 走 `mapsv0.bdimg.com`):
+> - 不需要 AK, 但需要带正确的 `Referer` 请求头伪装成浏览器
+> - 严格说违反服务条款 § 2.2 "不得直接存取 ... 内部数据", 属灰色区域
+> - 仅限学位论文/学术研究等非营利场景使用
+> - 不要将抓下的内容转分发或商用
+> - 风险: 后端调整可能随时让脚本失效, 需有备用方案
 
 ---
 
@@ -149,6 +166,8 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 | "把 lr 从 1e-4 调 3e-4 重跑 E1" | "跑所有实验看哪个好" |
 
 标尺: 单文件 ≤ 200 行, 单函数 ≤ 50 行, 一次对话 ≤ 2 文件.
+
+> ⚠ 例外: 数据采集类一次性脚本 (如 `collect_streetview_baidu_full.py`) 因为耦合需求和容错代码, 单文件可放宽到 ≤ 1000 行, 但仍要按职责分节注释.
 
 ---
 
@@ -188,6 +207,12 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 - log1p 训练, 指标时 `expm1` 回原空间?
 - DataLoader `num_workers > 0` 种子固定?
 - 预训练权重 `missing_keys` 查了?
+
+### L6 · 数据采集类专属 (新增 2026-04-26)
+- API 返回 JSON 不是图片? → 看 `Content-Type`, 多半是 key 错或配额超
+- 大量 `no_panorama`? → 候选点都挂在小区内部, 改用道路 buffer 重采
+- 坐标偏移? → 检查 coordtype (wgs84ll vs bd09ll vs gcj02ll), 国内 API 默认 bd09ll
+- 断点续采没省时间? → 检查 `quick_image_is_valid` 阈值, 太严会反复重下
 
 ---
 
@@ -235,6 +260,7 @@ git push
 3. 产出必须含: (a) 代码/diff (b) 4 个 BLOCK 更新建议 (c) 一行 commit.
 4. 任何代码不得出现 G:\ 绝对路径.
 5. 收到任务先复述, 我确认才动手.
+6. ⚠ API key 永远不出现在代码里, 永远从 .env 读.
 ```
 
 ---

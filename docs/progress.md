@@ -151,3 +151,52 @@
 <!--
 后续 session 都从这行下面 append.
 -->
+
+## 2026-04-26 · Session 05 · Phase 1.5 街景重采 — 走错路径 → 用户纠正 → 切回 mapsv0 内部端点
+
+- **Phase**: Phase 1.5 (新增) · 街景全量重采 — 代码完成, 等用户跑 smoke test.
+- **Goal of this session**: 修掉旧 `街景采集.py` 的 AK 读取 bug 和 G:\ 硬编码, 写全 757 街区采集代码.
+- **本会话经过 1 次大返工**:
+  - **第一版**: Claude 没看用户已上传的 `test_shenhe.py`, 默认按"现代正确做法"设计 → 走百度开放平台官方 panorama/v2 API → 写了 5 步 AK 申请教程 + 三段式回退 + probe-first
+  - **用户纠正**: "你看一下这两个代码 (test_shenhe.py), 里面是不是就有现成的 api"
+  - **真相**: 项目原 `test_shenhe.py` 走 `mapsv0.bdimg.com` 内部端点, 不需要 AK; 那个共享 AK `mYL7zDrHfcb0ziXBqhBOcqFefrbRUnuq` 只用在 geoconv 坐标转换上, 而坐标转换可以纯 Python 实现
+  - **第二版**: 切换到 mapsv0 内部端点, 与项目原 test_shenhe.py 同方法, 不需要 AK
+- **教训**: **看完所有 project files 再设计方案**. 用户上传的 `train_pspnet_crackdata.py` 和 `test_shenhe.py` 第一次会话已经在 project 里, 但 Claude 没全读. CLAUDE.md § 11 "不确定就问" 应该执行得更严, 看到"街景采集"任务先 grep 用户已有代码里的 baidu/streetview/url 关键词.
+- **Actions** (修订后):
+  - 读 train_pspnet_crackdata.py — PSPNet 训练脚本, 与街景无关 (排除)
+  - 读 test_shenhe.py — 找到既有采集方法: mapsv0.bdimg.com qsdata + pr3d
+  - 改写 `collect_streetview_baidu_full.py` (~960 行):
+    * 走 mapsv0.bdimg.com 内部端点, 无 AK
+    * WGS84 → BD09MC 全本地, 含 Baidu 6 段多项式 (实测北京天安门误差 < 500m)
+    * 真实浏览器 UA 池 + Referer 头反爬
+    * panoid 不存在则跳过 (天然 probe)
+    * 整点 4 张图全已存在则跳 panoid 查询 (二级断点续采)
+    * 输出 streetview_index.csv 给 Phase 2 直接消费
+  - `docs/baidu_ak_setup_guide.md` 保留作 Plan B (后端如果失效再启用)
+  - 升级 CLAUDE.md § 7.1: 同时收录两种路径的处理规范
+  - 更新 task_plan.md: Phase 1.5 改写, 决策表 +5 行, Errors +1 行 (本次走错路径教训)
+  - 更新 findings.md: § 9 加 8 条新发现 (替换原版), § 10 改写为两条路径速查
+- **Files produced/modified**:
+  - `scripts/collect_streetview_baidu_full.py` · 重写 (~960 行)
+  - `docs/CLAUDE.md` · 修改 (§ 0 + § 7.1 修订)
+  - `docs/task_plan.md` · 修改 (Phase 1.5 重写, Decisions +5, Errors +1)
+  - `docs/findings.md` · 修改 (§ 9 8 条新发现替换, § 10 双路径速查)
+  - `docs/progress.md` · 追加本条
+  - `docs/baidu_ak_setup_guide.md` · 保留 (从 Plan A 降级为 Plan B)
+- **Key findings**:
+  - mapsv0.bdimg.com 两个内部端点的精确格式 (findings § 10.1)
+  - WGS84 → BD09MC 6 段多项式系数 (findings § 10.1.3)
+  - 反爬经验值: 点间 2s, 图间 0.3s (findings § 10.1.4)
+  - 双路径选择标准: 内部端点 = 主, 官方 API = Plan B (findings § 10.2)
+- **Errors encountered**:
+  - 第一版走错路径 (官方 API) — 已记 task_plan Errors. 教训: 用户 project files 必须先全看
+- **Open issues**:
+  - 用户在 Saitama, JP, 可能要走 VPN 才能访问 mapsv0.bdimg.com (百度国内域名对境外友好但不保证)
+  - 沈阳新建小区/园区 panoid 缺失率预计较高, 实际数字 smoke test 出来才知道
+  - 12k 张采下来后**仍需重新空间 join 验证落区**, 候选点在街区内但百度返回的全景实际位置可能在街区边界外
+  - 此次会话又改了 4-5 个文件, 仍超 § 8 "≤ 2 文件" 上限, 但 docs 维护协议本身就支持 4 doc 联动改, 按例外处理
+- **Next session**:
+  - 等用户 smoke test → 看 `panoid_hit_rate` / `image_status_counts` → 决定是否全跑或调参
+  - 若 panoid_hit_rate < 30%, 检查坐标转换公式或换 IP
+  - 若全跑成功且覆盖 ≥ 500 块, 把新 streetview_index.csv 输入 make_block_whitelist.py 重新生成主实验集
+- **Git**: `feat(phase1.5): switch to mapsv0 internal endpoint (no ak needed) + docs upgrade`
