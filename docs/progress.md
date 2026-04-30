@@ -200,3 +200,52 @@
   - 若 panoid_hit_rate < 30%, 检查坐标转换公式或换 IP
   - 若全跑成功且覆盖 ≥ 500 块, 把新 streetview_index.csv 输入 make_block_whitelist.py 重新生成主实验集
 - **Git**: `feat(phase1.5): switch to mapsv0 internal endpoint (no ak needed) + docs upgrade`
+
+---
+
+## 2026-04-30 · Session 06 · Phase B 快速原型脚本 — 7 backbone + 15 KG 模型全套代码交付
+
+- **Phase**: Phase B (新增并行轨道) · 快速原型脚本
+- **Goal of this session**: 设计并交付 7 个独立脚本, 覆盖 7 视觉 backbone × 2 模态能耗预测 + 15 KG embedding 模型 × 2 KG 构建与训练, 为论文第一批基线数字铺路. 同步更新四大 docs.
+- **Actions**:
+  - 设计 Phase B 整体架构 (7 脚本分工, 与主流程 Phase 1-8 的关系)
+  - 写 `1_build_labels.py` (109 行): `沈阳L4能耗.shp` → log+Z-score → 5 分位分层 7:1.5:1.5 划分
+  - 写 `2_predict_streetview.py` (433 行): `build_backbone(name)` 工厂 + 7 backbone + per-backbone 特征缓存 + MLP 回归 + 汇总表
+  - 写 `3_predict_remote_sensing.py` (615 行): ESRI 瓦片 (zoom=17) 优先 + TIF fallback + 7 backbone + 最终 14 路对比表
+  - 写 `4_build_base_kg.py` (208 行): block-POI-主类-子类-landuse 五类实体 + 5 关系 + 90/5/5 划分 + block_to_entity.json
+  - 写 `5_build_building_kg.py` (289 行): + 建筑物 (Height/Function/Age/Quality) + POI sub_type; Height 4 档离散化; Age 自动识别 (年份/楼龄/字符串)
+  - 写 `6_kg_models.py` (648 行): 15 个 KG embedding 模型 + Poincaré ball / 球面 / Givens 几何工具 + MODEL_REGISTRY + forward 自测
+  - 写 `7_train_kg.py` (335 行): 自对抗损失 (gamma=12, alpha=0.5) + 64 neg/pos + filtered link prediction + embedding 导出 (.npz 含 block_emb 子集)
+  - 所有脚本 AST 语法检查通过
+  - 多轮更新 docs (task_plan / progress / findings / CLAUDE): 用户两次指出应在原有基础上更新而非重新生成
+  - 第一次 docs 更新未读原始文件直接重写 → 用户指正 → 读完四个原始文件后增量更新 (本条)
+- **Files produced/modified**:
+  - `phase_b_scripts/1_build_labels.py` · 创建
+  - `phase_b_scripts/2_predict_streetview.py` · 创建
+  - `phase_b_scripts/3_predict_remote_sensing.py` · 创建
+  - `phase_b_scripts/4_build_base_kg.py` · 创建
+  - `phase_b_scripts/5_build_building_kg.py` · 创建
+  - `phase_b_scripts/6_kg_models.py` · 创建
+  - `phase_b_scripts/7_train_kg.py` · 创建
+  - `docs/CLAUDE.md` · 修改 (§ 0 新增 Phase B 说明, § 11 新增第 7 条豁免)
+  - `docs/task_plan.md` · 修改 (目录 + Phase B 全段 + Decisions +8 行 + Errors +2 行 + 当前活动 Phase 更新)
+  - `docs/findings.md` · 修改 (§ 9 +7 条新发现 + § 11 新增 Phase B 架构速查)
+  - `docs/progress.md` · 追加本条
+- **Key findings**:
+  - AttentionCNN (CBAM) ≠ AttH (双曲注意力), 两者名字近似但完全不同 · findings § 9 + § 11.2
+  - Phase B 标签路径与主流程不一致 (⚠️ 待确认) · findings § 9 末条 + task_plan Errors
+  - Phase B KG 与 complete_knowledge_graph.txt 是两套独立图 · findings § 11.2
+  - 15 模型 M2GNN/GIE 简化版去 GNN 分支以保统一接口 · findings § 9
+- **Errors encountered**:
+  - 本次两次 docs 更新均未先读原始文件 → 重新生成而非增量更新 → 用户指正后才正确执行. 教训再次验证: **先读所有 project files 再动笔**, CLAUDE.md § 11 "不确定就问" + "看完 project files" 要更严格执行.
+- **Open issues**:
+  - ⚠️ `E_Final_W5`/`BlockID` (SHP) 与 `energy`/`Region_N` (JSON) 是否同源 — **Phase B 第一步必须验证**
+  - ⚠️ `BlockID` (L4) 与 `LandID` (L5) 编号体系是否互通 — 融合阶段必须确认
+  - Phase B 脚本硬编码 `G:\Knowcl` 路径 — 待正式集成前迁移到 `paths.yaml`
+  - M2GNN / GIE 完整版需 PyG 依赖 — 当前简化版为 GNN-free 骨架
+  - Phase 1.5 smoke test 结果尚未回来
+- **Next session**:
+  - 优先: 用户确认 ⚠️ 待对账风险 (E_Final_W5 vs energy 统计对比), 然后跑 `1_build_labels.py` 看输出分布
+  - 若 Phase 1.5 smoke test 回来, 根据 `panoid_hit_rate` 决定是否全跑
+  - Phase 1 收尾: 运行 `make_block_whitelist.py` 生成 208-block 白名单
+- **Git**: `feat(phase-b): 7 standalone scripts — 7 backbone + 15 kg models + docs update`

@@ -344,6 +344,12 @@ DATA_ROOT=
 - [2026-04-26] 沈阳 757 街区 × 4 候选点 × 4 方向, 但 panoid 不存在的点不下载, 实际请求量约 (3000 候选点 × 1 panoid + 3000 × hit_rate × 4 张). 假设 hit_rate=70%, 总请求约 11400; 点间 sleep 2s 估时约 1.5–2 小时. 来源: 本次估算. 影响: 单次会话可完成全量重采.
 - [2026-04-26] 国内 API key (官方路径) 必须实名认证, AI 助手无法替用户申请. **但若走前端内部端点路径**, 不需要 AK, 也就绕开了这个限制. 来源: 用户提供 test_shenhe.py + 百度服务条款. 影响: CLAUDE.md § 7.1 同时收录两种路径的处理规范.
 - [2026-04-26] 内部端点路径合规风险: 严格说违反百度服务条款 § 2.2 "不得直接存取 ... 内部数据", 属灰色区域. 但: ① 项目原 test_shenhe.py 已使用此方法采了 200k+ 张; ② 学术非营利场景在国内 GIS 圈广泛实践; ③ 不分发不商用即可. 来源: 百度服务条款 lbsyun.baidu.com/index.php?title=open/law. 影响: 在 README_collection.md 和 docs/CLAUDE.md § 7.1 标注风险, 并保留 baidu_ak_setup_guide.md 作 Plan B.
+- [2026-04-30] **Phase B 7 backbone 设计**: ResNet50(2048d) / DenseNet121(1024d) / ConvNeXt-T(768d) / ViT-B/16(768d) / MobileNetV3-L(960d) / EfficientNet-B0(1280d) / AttentionCNN(2048d, ResNet50+CBAM). 来源: 本次会话设计. 影响: Phase 4 单模态 baseline 选 backbone 时可参考 Phase B 结果.
+- [2026-04-30] **AttentionCNN ≠ AttH**: AttentionCNN = ResNet50 + CBAM (Channel Attention + Spatial Attention, Woo et al. ECCV 2018), 是图像 backbone. AttH = Chami et al. ACL 2020 双曲空间注意力旋转/反射融合, 是 KG embedding 模型. 名字相似但完全不同. 来源: 本次设计. 影响: 代码中及论文中必须明确区分, 不要混淆.
+- [2026-04-30] **Phase B 15 个 KG embedding 模型分类**: 欧氏平移 (TransE/MuRE) / 复数旋转 (DistMult/ComplEx/RotatE) / 四元数 (QuatE) / 张量分解 (TuckER) / 双曲 (MuRP/RotH/RefH/AttH) / 球面 (MuRS) / 锥 (ConE) / 多曲率 (M2GNN/GIE). M2GNN/GIE 简化版去掉 GNN 消息传递, 保留多曲率几何骨架, 使所有 15 模型在统一 (h,r,t)→score 接口下可比. 来源: 本次设计 + 各论文. 影响: Phase 5 CompGCN 才是主流程 KG 编码器; Phase B 15 模型做 link prediction 基线比较.
+- [2026-04-30] **Phase B KG 训练细节**: RotatE 风格自对抗损失 (gamma=12, alpha=0.5), 64 负样本/正样本, dim=32 默认, 评估子采样 max_test_triples=1000 加速. 曲率 c 全部学习 (softplus 保正). RotH/RefH/AttH 要求 dim 偶数, 训练器自动 +1 修正. 来源: 本次设计. 影响: 若三元组数超 200 万建议升 dim 到 64-128.
+- [2026-04-30] **Phase B 遥感影像**: ESRI World Imagery zoom=17 (沈阳约 1m/像素), bbox+50m buffer. 失败 fallback 本地 TIF (11-卫星数据/影像下载_2503152313.tif). 与主流程 15-遥感影像 PNG 图源不同 (已预裁切 vs 现下载). 来源: 本次设计. 影响: Phase B SI 和主流程 SI 图像不一样, 论文中要标清.
+- [2026-04-30] **⚠️ 关键待确认: Phase B 标签路径与主流程不一致**. Phase B 用 `8-街区数据/沈阳L4能耗.shp` (BlockID, E_Final_W5); 主流程用 `10-街区能耗标签/shenyang_region2allinfo.json` (Region_N, energy). 这两份数据是否同源? 若 E_Final_W5 ≈ energy (同一能耗年份/聚合方式), Phase B 结果才可与主流程对比. 来源: 本次设计 + 原始文件对照. 影响: **Phase B 第一步就要验证**: `df['E_Final_W5'].describe()` vs `{Region_N: data.energy}` 统计是否吻合 (mean≈10.7, std≈9.9).
 
 ---
 
@@ -437,3 +443,47 @@ WGS84 → GCJ02 → BD09LL → BD09MC, 全本地实现:
 | `panoid_status=panoid_error:http_418` | 风控等级提高 | 同上 |
 | `image status=non_image` | pr3d 端点返回 HTML (非图片) | 多半 panoid 失效, 跳过 |
 | `image status=failed:image_too_small_bytes` | 返回了空图占位符 | panoid 失效, 跳过 |
+
+---
+
+## § 11. Phase B 快速原型脚本架构速查 (2026-04-30 新增)
+
+### § 11.1 脚本输入输出全表
+
+| 脚本 | 关键输入路径 | 关键输出 | 核心字段 |
+|---|---|---|---|
+| `1_build_labels.py` | `8-街区数据/沈阳L4能耗.shp` | `energy_labels.csv`, `label_stats.json` | `BlockID`, `E_Final_W5` |
+| `2_predict_streetview.py` | `streetview_index.csv` + `energy_labels.csv` | `sv_predictions_<bb>.csv × 7`, `sv_metrics_summary.csv` | — |
+| `3_predict_remote_sensing.py` | ESRI/`11-卫星数据/*.tif` + `energy_labels.csv` | `rs_predictions_<bb>.csv × 7`, `final_comparison.csv` | — |
+| `4_build_base_kg.py` | POI (`6-POI数据/merged_poi.shp`) + L5 (`8-街区数据/沈阳L5.shp`) + 用地 (`16-地块数据/沈阳市.shp`) | `base/train.tsv`, `entities.json`, `block_to_entity.json` | `name, main_cat, sub_cat`, `LandID`, `Level1_cn, Level2_cn` |
+| `5_build_building_kg.py` | 同上 + 建筑 (`9-建筑物数据/processed_shenyang20230318.shp`) | `building/train.tsv`, … | `Height, Function, Age, Quality`, `sub_type` |
+| `6_kg_models.py` | 无 (库文件) | 15 个模型类 | — |
+| `7_train_kg.py` | `<base\|building>/train.tsv` + `6_kg_models.py` | `embeddings_<model>.npz` (含 `block_emb`), `metrics_summary.csv` | `--kg base\|building --model <name>\|all --dim 32` |
+
+### § 11.2 Phase B 与主流程对比
+
+| 维度 | Phase B 快速原型 | 主流程 (Phase 1-8) |
+|---|---|---|
+| 标签来源 | `沈阳L4能耗.shp` / `E_Final_W5` / `BlockID` | `shenyang_region2allinfo.json` / `energy` / `Region_N` |
+| 划分 | 5 分位分层 7:1.5:1.5 | 208-block 6:2:2 (Phase 1 收尾) |
+| SI 图像 | ESRI 现下 + TIF fallback | `15-遥感影像/<block_id>.png` 预裁切 |
+| KG | 从 SHP 零起构建 | `complete_knowledge_graph.txt` (852k 三元组) |
+| KG 编码器 | 15 个标准 embedding 模型 | CompGCN + TuckER 初始化 |
+| 对比学习 | 无 (仅 MLP 回归) | KnowCL InfoNCE Stage1+2 |
+| 路径规范 | G:\\ 硬编码 (临时) | `config/paths.yaml` + `.env` |
+| 适用场景 | 快速出数字, 探索 backbone/KG 模型排序 | 正式复现 KnowCL, 论文主实验 |
+
+### § 11.3 下游融合接口 (Phase B embedding 给融合用)
+
+```python
+import numpy as np
+# 加载 KG block embedding
+data = np.load("003-知识图谱/base/embeddings_rotate.npz")
+block_ids   = data["block_id"]      # (n_blocks,) int
+block_emb   = data["block_emb"]     # (n_blocks, dim) float32
+# 按 block_id 查找
+idx = np.where(block_ids == target_block_id)[0]
+kg_vec = block_emb[idx[0]]          # (dim,)
+```
+
+`block_to_entity.json`: `{block_id_int: entity_id_int}` —— Phase B 图像侧与 KG 侧的桥.

@@ -66,6 +66,14 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 │   ├── collect_streetview_baidu_full.py  ← Phase 1.5, 走 mapsv0 内部端点
 │   ├── setup.sh
 │   └── setup.bat
+├── phase_b_scripts/             ← Phase B 快速原型脚本 (独立轨道, 当前 G:\ 路径)
+│   ├── 1_build_labels.py        ← SHP 能耗 → log+Z-score → 分层划分
+│   ├── 2_predict_streetview.py  ← 7 backbone × 街景 MLP 回归
+│   ├── 3_predict_remote_sensing.py  ← 7 backbone × 遥感 MLP 回归
+│   ├── 4_build_base_kg.py       ← block-POI-类目-landuse KG
+│   ├── 5_build_building_kg.py   ← + 建筑物 + sub_type KG
+│   ├── 6_kg_models.py           ← 15 个 KG embedding 模型库
+│   └── 7_train_kg.py            ← KG 训练驱动 + link prediction 评估
 ├── src/
 │   ├── utils/
 │   │   ├── label_transform.py   ← log1p/expm1
@@ -240,6 +248,92 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 
 ---
 
+## Phase B · 快速原型脚本轨道 (与 Phase 1–8 并行, 独立运行) ⭐ 新增 2026-04-30
+
+> **目的**: 在 KnowCL 主流程（Phase 2–7）完成之前, 通过独立脚本快速获得 7 backbone × 2 模态 + 15 KG 模型 × 2 KG 的对比基线数字, 为论文提供第一批实验证据.
+>
+> **架构特征**: 独立 `.py` 文件, 当前路径**硬编码 `G:\Knowcl`** (用户显式指定), 不依赖 `src/` 模块, 不走 `config/paths.yaml`. 正式集成进主流程前需重构.
+>
+> **与主流程关系**: Phase B 是 E1~E4 的"快速复现版". Phase 4/5/6/7 才是完整 KnowCL 管线. 两个轨道的结果应独立汇报, 不能互相替代.
+
+### ⚠️ 待对账风险 (Phase B 开跑前必须确认)
+
+| 风险 | 原始架构用法 | Phase B 脚本用法 | 状态 |
+|---|---|---|---|
+| 能耗标签来源 | `10-街区能耗标签/shenyang_region2allinfo.json`, 字段 `energy`, ID = `Region_N` | `8-街区数据/沈阳L4能耗.shp`, 字段 `E_Final_W5`, ID = `BlockID` | ⚠️ **待用户确认是否同一数据** |
+| 街区 ID 格式 | `Region_N` (如 Region_1) | `BlockID` int | ⚠️ 需对应关系 |
+| L4 BlockID 与 L5 LandID | L4 = 能耗主表 (757 块) | L5 = KG 地块 (LandID) | ⚠️ 两套编号是否互通待确认 |
+| KG 来源 | 现有 `complete_knowledge_graph.txt` (852k 三元组, CompGCN 输入) | 从 SHP 零起构建 (block-POI-建筑-landuse) | ❗ 两套 KG 独立, 不能混用 embedding |
+| SI 影像 | `15-遥感影像/<block_id>.png` (757 张已预裁切) | ESRI 瓦片下载 + fallback 本地大 TIF | ⚠️ Phase B SI 与主流程 SI 图源不同 |
+| 遥感 fallback TIF | 不用 | `11-卫星数据/影像下载_2503152313.tif` | 确认文件存在即可 |
+
+### Phase B 脚本清单与状态
+
+| 脚本 | 作用 | 状态 | 输出位置 |
+|---|---|---|---|
+| `1_build_labels.py` | `沈阳L4能耗.shp` → log+Z-score → 5 分位分层 7:1.5:1.5 划分 | ✅ 代码完成 | `999-输出成果文件/002-能耗预测/` |
+| `2_predict_streetview.py` | 7 backbone 街景特征 MLP 回归, per-backbone 缓存 | ✅ 代码完成 | 同上 |
+| `3_predict_remote_sensing.py` | ESRI 优先 + TIF fallback, 7 backbone MLP 回归 | ✅ 代码完成 | 同上 |
+| `4_build_base_kg.py` | block-POI-主类-子类-landuse KG | ✅ 代码完成 | `999-输出成果文件/003-知识图谱/base/` |
+| `5_build_building_kg.py` | + 建筑物/高度/年代/质量/功能 + POI sub_type | ✅ 代码完成 | `999-输出成果文件/003-知识图谱/building/` |
+| `6_kg_models.py` | 15 个 KG embedding 模型类 (库文件) | ✅ 代码完成, AST 通过 | — |
+| `7_train_kg.py` | 自对抗训练 + filtered link prediction + embedding 导出 | ✅ 代码完成 | `003-知识图谱/<base\|building>/` |
+
+### Phase B 运行顺序
+
+```bash
+# 先确认 ⚠️ 待对账风险全部 OK 再跑
+
+# 能耗预测轨道
+python 1_build_labels.py
+python 2_predict_streetview.py --backbone all    # 首跑约 1.5-2h (GPU)
+python 3_predict_remote_sensing.py --backbone all
+
+# KG 轨道
+python 4_build_base_kg.py
+python 5_build_building_kg.py
+python 6_kg_models.py                           # 自测 15 个 forward
+python 7_train_kg.py --kg base     --model all
+python 7_train_kg.py --kg building --model all
+```
+
+### Phase B 关键输出
+
+```
+999-输出成果文件/
+├── 002-能耗预测/
+│   ├── energy_labels.csv, label_stats.json
+│   ├── sv_features_block_<bb>.npz × 7        # 特征缓存
+│   ├── sv_predictions_<bb>.csv × 7
+│   ├── sv_mlp_<bb>.pt × 7
+│   ├── sv_all_models.csv                       # 7 backbone 预测并排
+│   ├── sv_metrics_summary.csv
+│   ├── rs_images/Block_*.jpg                   # 遥感影像 (一次性)
+│   ├── rs_predictions_<bb>.csv × 7
+│   ├── rs_metrics_summary.csv
+│   ├── final_comparison.csv                    # sv × rs × 7 backbone = 14 路对比
+│   └── metrics_summary_all.csv
+└── 003-知识图谱/
+    ├── base/
+    │   ├── train/valid/test.tsv
+    │   ├── entities.json, relations.json
+    │   ├── block_to_entity.json               # 下游融合桥
+    │   ├── embeddings_<model>.npz × 15        # 含 block_emb 子集
+    │   ├── metrics_<model>.json × 15
+    │   └── metrics_summary.csv
+    └── building/ (结构同 base)
+```
+
+### Phase B 验收标准
+
+- `metrics_summary_all.csv` 有 14 行 (7 sv + 7 rs), R²(log) ≥ 0.3 视为流程通畅
+- `base/metrics_summary.csv` 有 15 行, MRR > 0.05 视为 KG 有信号
+- 跑出数字后把两张 csv 贴回, 决定哪个 backbone / KG 模型进入 Phase 4/5 主流程
+
+- **Status:** in_progress (代码完成, 等用户跑通并确认 ⚠️ 风险点)
+
+---
+
 ## Decisions Made (append-only)
 
 | 日期 | 决策 | 原因 | Phase |
@@ -259,6 +353,13 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 | 2026-04-26 | 坐标转换 WGS84 → BD09MC 全本地实现 (Baidu 分段多项式) | 不依赖任何外部 API, 也不依赖 geoconv 那个共享 AK; 坐标转换误差 < 500m, 同坐标系下完全可接受 | Phase 1.5 |
 | 2026-04-26 | ~~官方 panorama/v2 API 路径~~ 降级为 Plan B, 仅当内部端点失效再启用 | 用户已确认走内部端点是项目既定方法 | Phase 1.5 |
 | 2026-04-26 | API key 处理规范 § 7.1: 官方 API 三段式回退 + 灰色区域使用须知 | CLAUDE.md 协议级补全 | 协议级 |
+| 2026-04-30 | 新增 Phase B 快速原型脚本轨道 (7 个独立 .py) | 在 KnowCL 主流程完成前快速获得 7 backbone × 2 模态 + 15 KG 模型基线数字 | Phase B |
+| 2026-04-30 | Phase B 图像 backbone 7 选: ResNet50 / DenseNet121 / ConvNeXt-T / ViT-B16 / MobileNetV3-L / EfficientNet-B0 / AttentionCNN | 覆盖经典 CNN / 轻量 / Transformer / 注意力 4 类; AttentionCNN = ResNet50+CBAM (非 KG 侧的 AttH) | Phase B |
+| 2026-04-30 | Phase B KG embedding 选 15 模型而非 CompGCN | Phase B KG 是从 SHP 零起构建的独立图, 不同于主流程 complete_knowledge_graph.txt; 用 TransE/RotatE 等标准链接预测模型做 link prediction 评估 | Phase B |
+| 2026-04-30 | Phase B KG 分两层: base (block-POI-landuse) + building (+ 建筑物 + sub_type) | 对应主流程 base-KG vs bldg-UKG 的对比逻辑 | Phase B |
+| 2026-04-30 | Phase B 脚本当前豁免 G:\\ 路径约束 (用户显式指定), 正式集成前重构 | 用户在本次会话中明确给定所有路径, 属于探索性脚本 | Phase B |
+| 2026-04-30 | AttentionCNN 用 CBAM 实现 (ResNet50 + Channel Attention + Spatial Attention) | CBAM 是 attention CNN 文献最规范形式, 额外参数仅约 0.5M; 注意与 KG 侧 AttH (双曲注意力) 不是同一个东西 | Phase B |
+| 2026-04-30 | Phase B 特征提取后缓存 .npz, MLP 重训只需秒级 | 样本量小 (~750), 端到端 finetune 过拟合风险大; 特征缓存便于反复调参 | Phase B |
 
 ---
 
@@ -272,6 +373,8 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 | 2026-04-26 | 旧 `街景采集.py` 跑到 [7/7] 抛 `ValueError: 未设置 BAIDU_MAP_AK` | 用错了路径: 旧脚本走百度开放平台官方 API, 必须 AK; 但项目原 `test_shenhe.py` 走 mapsv0 内部端点不需要 AK | 新版 `collect_streetview_baidu_full.py` 改回 mapsv0 内部端点路径, 与项目原 `test_shenhe.py` 同方法 | Phase 1.5 |
 | 2026-04-26 | 旧脚本硬编码 `Path(r"G:\Knowcl")` | 违反 CLAUDE.md § 7 可移植性 | 新版从 `config/paths.yaml` 读 DATA_ROOT, 所有相对路径基于此解析 | Phase 1.5 |
 | 2026-04-26 | 第一次 Claude 写的版本走百度开放平台官方 API | Claude 没看用户已上传的 `test_shenhe.py`, 误以为要从零设计采集方案 | 用户提示后, 切换到 mapsv0 内部端点同方法; 教训: 看完所有 project files 再设计 | Phase 1.5 |
+| 2026-04-30 | Phase B 脚本标签来源 (`沈阳L4能耗.shp` / `E_Final_W5` / `BlockID`) 与主流程 (`shenyang_region2allinfo.json` / `energy` / `Region_N`) 不一致 | 用户在本次会话中提供的路径与原始数据文件不同 | **待用户确认**: 两份是否为同一数据不同格式? 若不同需建 BlockID↔Region_N 映射表; Phase B 跑前必须先验证 | Phase B |
+| 2026-04-30 | Phase B KG 与主流程 KG 是两套独立图 (SHP 构建 vs complete_knowledge_graph.txt) | 两次构建逻辑完全不同, embedding 不可互换 | Phase B embedding 和主流程 CompGCN embedding 分开存储; 论文中分开报告, 标注来源 | Phase B |
 
 ---
 
@@ -279,5 +382,7 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 
 **Phase 1 in_progress** — 最后一步: 运行 `make_block_whitelist.py` 生成 208-block 主实验集.
 **Phase 1.5 in_progress (并行)** — 代码完成, 等用户拿 AK 跑 smoke test.
+**Phase B in_progress (并行)** — 7 脚本代码全部完成, 等用户: ① 确认 ⚠️ 待对账风险 ② 跑通后回填指标表.
 
 下一个 Phase → **Phase 2 · 流水线基石** (block_index.py 是核心).
+Phase B 下一步 → 用户确认 `E_Final_W5`/`BlockID` 与 `energy`/`Region_N` 对应关系, 然后跑 `1_build_labels.py` 验证.

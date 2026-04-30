@@ -17,6 +17,7 @@
 - 7 个视觉 backbone 对比池: ResNet-50 / ConvNeXt / DenseNet121 / ViT / MobileNetV3 / AttentionCNN / EfficientNet
 - ⚠️ **关键约束**: SV 仅覆盖 208 个街区 (三模态交集), 主实验在 208-block 子集上跑, 不是全部 757 块
 - ⚠️ **新增分支 (2026-04-26)**: Phase 1.5 用百度地图前端内部端点 (`mapsv0.bdimg.com`) 重采全 757 街区街景, **无需申请 AK** (与项目原 `test_shenhe.py` 同方法). 若成功, 主实验可升级为 757-block 全量.
+- ⚠️ **新增并行轨道 (2026-04-30)**: Phase B 快速原型脚本 (`1_build_labels.py` ~ `7_train_kg.py`) —— 用于在 KnowCL 主流程完成前快速出指标对比 (7 视觉 backbone × 街景/遥感 + 15 KG embedding 模型 × base/building KG). **与 src/ 主流程独立, 当前硬编码 G:\\ 路径 (待迁移到 paths.yaml)**. 见 `task_plan.md § Phase B`.
 
 完整背景、关键论文数字、目录清单、约束 — 见 `findings.md`.
 路线图、阶段、已做决策 — 见 `task_plan.md`.
@@ -261,6 +262,7 @@ git push
 4. 任何代码不得出现 G:\ 绝对路径.
 5. 收到任务先复述, 我确认才动手.
 6. ⚠ API key 永远不出现在代码里, 永远从 .env 读.
+7. ⚠ Phase B 快速原型脚本当前豁免 G:\ 限制 (用户显式指定路径), 但正式集成进 src/ 前必须迁移到 paths.yaml.
 ```
 
 ---
