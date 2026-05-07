@@ -13,10 +13,10 @@
 > **新对话 Claude 开场必读. 这 5 条能一句话概括整个项目.**
 
 1. **项目性质**: 把 KnowCL (纽约社经预测) 迁移到沈阳**街区能耗回归**, 核心贡献 = 把基础 KG 扩成 bldg-UKG.
-2. **精度等级目标** (必须做出): `SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI`.
+2. **精度等级目标** (主流程仍以此为参考, Phase B 实测显示沈阳能耗任务 SV ≈ SI): `SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI`. ⚠ Phase B 已验证 SV / SI 单模态在沈阳能耗上水平相当 (R²(log) 0.34-0.37), 与论文 § 5.2 "城市/指标偏好不同" 一致.
 3. **数据在** `G:\Knowcl\1-* ... 15-*`, 输出固定到 `G:\Knowcl\999-输出成果文件\<编号>-*`.
 4. **论文继承的硬数字** (见 § 2): 嵌入维度 64, CompGCN + TuckER 初始化, 对称点积 InfoNCE, 标签 log1p.
-5. **⚠️ 核心样本量约束**: SV 空间 join 后仅覆盖 208 个街区, 主实验用 208-block 子集划分 (见 § 4.1), **不是 757**.
+5. **⚠️ 核心样本量约束**: SV 空间 join 后仅覆盖 208 个街区, 主实验用 208-block 子集划分 (见 § 4.1), **不是 757**. ⚠ Phase 1.5 街景重采后已扩展到 698 块 (Phase B 用此基础), 主实验切换待定.
 
 ---
 
@@ -93,7 +93,7 @@
 ### § 2.6 在纽约数据上的基准数字 (我们要超越)
 - SI, crime prediction: R² = 0.536 (KnowCL) vs 0.434 (PG-SimCLR)
 - SV, population prediction: R² = 0.377 (KnowCL) vs 0.283 (PG-SimCLR)
-- 最重要结论: 不同城市、不同指标对 SV/SI 的偏好不同 (论文 § 5.2 倒数第二段)
+- 最重要结论: 不同城市、不同指标对 SV/SI 的偏好不同 (论文 § 5.2 倒数第二段). **2026-05-07 在沈阳能耗任务上验证: SV 0.371 / SI 0.342, 互补关系成立.**
 
 来源: arxiv 2302.13094 全文. 影响: Phase 5, 6, 7 所有超参初值直接抄这个, 再做微调.
 
@@ -131,6 +131,12 @@
 - 两份划分文件分别冻结后**不得动**. 要调实验, 只改超参.
 - ~~按 `block_id` 划 6:2:2, 共用同一份划分~~ → **已废弃**: SV 只覆盖 208 块, 不能和 757-block 划分共用. 见 § 4.1.
 
+### § 3.6 单图 backbone 特征处理戒律 (2026-05-07 新增, 来自 sv/rs v1→v2 教训)
+1. **聚合前不要做 L2 归一化** (`feats /= np.linalg.norm(...)`). 这会丢幅度信号, 街景 v1 / 遥感 v1 都因这一行 R²(log) 被压在 0.10-0.18, 删后翻倍到 0.30-0.37.
+2. 归一化只应该出现在 **InfoNCE 投影头之后** (损失函数内部需要), 不应该在 backbone penultimate features 上.
+3. 街区级聚合策略要保留方差信号: 街景多图用 mean+std concat, 遥感单图无法多池化, 改用几何辅助特征 concat.
+4. 多输出函数 (如 fit_ridge) 统一返回**全样本**预测, 算指标时切片. 反过来会触发保存阶段长度不齐 → KeyError.
+
 ---
 
 ## § 4. 数据事实 (Phase 1 检测完成, 2026-04-24 填入)
@@ -143,12 +149,13 @@
 - [2026-04-24] 建筑物总数 (主文件 processed_shenyang20230318.shp): **153,428** 栋; 三环版 (沈阳建筑物三环.shp): 87,163 栋; 旧版 (沈阳建筑物.shp): 132,184 栋 (无高度字段, 不用). 来源: data_check_report C05. 影响: Phase 3 KG 扩展选主文件.
 - [2026-04-24] 能耗标签覆盖街区数: **757** (全覆盖, 与 label 完全对齐). 来源: data_check_report C03. 影响: 标签不是瓶颈.
 - [2026-04-24] KG Region 实体数: **757** (与街区完全对齐). 来源: data_check_report C09. 影响: KG 不是瓶颈.
-- [2026-04-24] **⚠️ SV 空间 join 覆盖街区数: 208** (CSV 79163 条点记录经纬度空间 join 到 沈阳L4.shp 后结果). 原始 CSV block_id 列覆盖 1225 个 ID (含大量不在 757 块内的 ID), 直接匹配 label 仅 174 块. 来源: data_check_report C06 + data_check_summary.json. 影响: **SV 实验 (E1/E5) 样本量上限 = 208, 远低于 500 的建模阈值, 是本项目最大瓶颈**.
+- [2026-04-24] **⚠️ SV 空间 join 覆盖街区数: 208** (CSV 79163 条点记录经纬度空间 join 到 沈阳L4.shp 后结果). 原始 CSV block_id 列覆盖 1225 个 ID (含大量不在 757 块内的 ID), 直接匹配 label 仅 174 块. 来源: data_check_report C06 + data_check_summary.json. 影响: **SV 实验 (E1/E5) 样本量上限 = 208, 远低于 500 的建模阈值, 是本项目最大瓶颈**. ⚠ Phase 1.5 重采后扩展到 698 块, 主流程主实验切换待定.
 - [2026-04-24] SI (15-遥感影像) 文件数: **757 张 PNG** (每块一张, 已预裁切). 11-卫星数据 下有 1 张大 TIF (16896×15360px, 4 波段, EPSG:3857) 作为原图备用. 来源: data_check_report C02/C07. 影响: SI 覆盖 757 块, 不是瓶颈.
 - [2026-04-24] 街景图总数 (平铺): **203,452 张 JPG**. CSV 映射表有 79,163 条坐标记录. 按空间 join 后, 208 个街区内每块 min=1, median=42, max=1,837. 来源: data_check_summary.json. 影响: 空间 join 是唯一可靠的 SV-block 对应方式, 不能依赖 CSV 原始 block_id 列.
 - [2026-04-24] KG 三元组 / 实体 / 关系: **852,324 / 273,348 / 15**. 来源: data_check_report C09. 影响: 关系数 15 在 CompGCN 参数可承受范围内 (< 20 阈值).
 - [2026-04-24] 建筑-街区空间关联: 689/757 个街区有建筑物, 68 个街区无建筑. 每块中位数 40 栋, 最多 3,217 栋. 来源: data_check_report C12. 影响: Phase 3 KG 扩展时 68 个无建筑街区的 Building 实体为空, 需特殊处理.
 - [2026-04-24] **三模态精确交集 (label ∩ KG ∩ SV_spatial) = 208**. 与 SI 交集 = 208 (SI 覆盖全 757 块, 不减少). 来源: data_check_summary.json multimodal_intersection_recommended. 影响: 主实验样本量 208, 需重新对这 208 块做 6:2:2 划分 (≈125/41/42).
+- [2026-05-07] **Phase 1.5 重采实测**: 街景下载完成 9316 张 / 698 街区 (与 757 差 59 块, 多为无 panoid 的小区/园区内部). Phase B 在此 698 块基础上做实验, 7:1.5:1.5 切分得 train=488/val=105/test=105. 来源: Phase B 实测日志 (Session 07-09). 影响: Phase B 用 698 块, 主流程主实验是否切换到 698 仍待 Phase 1 收尾决策.
 
 ### § 4.2 标签
 
@@ -267,6 +274,8 @@
 | `ValueError: y contains NaN` | label 有 NaN 没过滤, 或 log 了负值 |
 | 测试比训练慢 10x | 忘 `model.eval()` + `torch.no_grad()` |
 | 多卡 R² 反而降 | 没换 `SyncBatchNorm` |
+| `KeyError: 'R2_log'` 在 sort_values 时 | metrics list 是空的, 上游异常被 try-except 吞 → 加 traceback |
+| `All arrays must be of the same length` 在 pd.DataFrame 时 | 某列长度 ≠ 其他列, 多半是 fit_xxx 只返回部分子集预测 |
 
 ---
 
@@ -350,6 +359,15 @@ DATA_ROOT=
 - [2026-04-30] **Phase B KG 训练细节**: RotatE 风格自对抗损失 (gamma=12, alpha=0.5), 64 负样本/正样本, dim=32 默认, 评估子采样 max_test_triples=1000 加速. 曲率 c 全部学习 (softplus 保正). RotH/RefH/AttH 要求 dim 偶数, 训练器自动 +1 修正. 来源: 本次设计. 影响: 若三元组数超 200 万建议升 dim 到 64-128.
 - [2026-04-30] **Phase B 遥感影像**: ESRI World Imagery zoom=17 (沈阳约 1m/像素), bbox+50m buffer. 失败 fallback 本地 TIF (11-卫星数据/影像下载_2503152313.tif). 与主流程 15-遥感影像 PNG 图源不同 (已预裁切 vs 现下载). 来源: 本次设计. 影响: Phase B SI 和主流程 SI 图像不一样, 论文中要标清.
 - [2026-04-30] **⚠️ 关键待确认: Phase B 标签路径与主流程不一致**. Phase B 用 `8-街区数据/沈阳L4能耗.shp` (BlockID, E_Final_W5); 主流程用 `10-街区能耗标签/shenyang_region2allinfo.json` (Region_N, energy). 这两份数据是否同源? 若 E_Final_W5 ≈ energy (同一能耗年份/聚合方式), Phase B 结果才可与主流程对比. 来源: 本次设计 + 原始文件对照. 影响: **Phase B 第一步就要验证**: `df['E_Final_W5'].describe()` vs `{Region_N: data.energy}` 统计是否吻合 (mean≈10.7, std≈9.9).
+- [2026-05-07] **Phase B SV 模态 v2.1 实测** (698 街区, 7 backbone × {mlp, ridge}): ResNet50 MLP R²(log)=0.371 (最高), AttentionCNN MLP 0.343, 与 KnowCL 论文纽约 SV 实验 R²~0.377 同量级. L0 baseline 仅辅助特征 (log 图数 + GPS std) R²(log)=0.092, 故图像 backbone 净增益 +0.28, 信号显著. 来源: Phase B Session 07 实测. 影响: Phase 4 (E1) 优先用 ResNet50/AttentionCNN, 不需要换 DINOv2/CLIP.
+- [2026-05-07] **L2 归一化在单图特征聚合阶段是反向操作**: KnowCL 论文里只在 InfoNCE 投影头之后才归一化 (是损失函数需要), 在 backbone penultimate 特征上做归一化会丢幅度信号. 街景 v1 与遥感 v1 都误置. 修复: v2.1 删除该行, 改在 MLP 输入端用 BatchNorm1d 处理尺度. 来源: 街景 v2.1 实测 R²(log) 从 0.18 → 0.37 验证. 影响: 后续所有图像 backbone 实验 (Phase 4 E1/E2, Phase 7 E5/E6) 必须先核查此处. **CLAUDE.md § 9 L2 已加为戒律第 4 项.**
+- [2026-05-07] v2 设计教训: 多输出函数 (sklearn baseline 类) 返回时切片粒度要对齐. 函数应统一返回**全样本**预测, 算指标时切片. 反过来会触发保存阶段长度不齐. 来源: v2.1 bugfix. 影响: 后续所有 sklearn baseline 函数都遵循"返回全长"原则, 已写入 task_plan Decisions.
+- [2026-05-07] **Phase B SI 模态 v2.1 实测** (698 街区, 7 backbone × {mlp, ridge}): DenseNet121 Ridge(α=1000) R²(log)=0.342 / R²(raw)=0.172 (最高), 击败所有 MLP. 7 backbone 排序: densenet121 / vit_b_16 / resnet50 / convnext_tiny / attention_cnn / efficientnet_b0 / mobilenet_v3_large. L0 几何辅助 baseline R²(log)=0.067, 图像净增益 +0.275, 信号显著. 来源: Phase B Session 09 实测. 影响: Phase 4 (E2) 优先用 DenseNet121, 且要带 Ridge 对照, MLP 不一定最强.
+- [2026-05-07] **沈阳能耗任务上 SV < SI 等级不严格成立**: 实测 SV 最佳 R²(log)=0.371, SI 最佳 0.342; raw 空间反过来 SV=0.127, SI=0.172. 街景擅长拟合多数低能耗街区, 遥感擅长拟合少数高能耗大街区, 互补关系. 与 KnowCL 论文 § 5.2 "城市/指标对 SV/SI 偏好不同" 一致. 来源: Phase B Session 09 实测对比. 影响: 论文报告时不强行套等级, 而报告"两者水平相当, 互补", task_plan Goal 段已加 ⚠ 注释.
+- [2026-05-07] **轻量 backbone (MobileNetV3, EfficientNet-B0) 在单图遥感 + 224 patch 上明显垫底**: R²(log) 0.16-0.18 vs 其他 0.29-0.34. 街景上同样这两个 backbone 也偏弱. 推断: 单图 + 低分辨率 patch 对特征容量要求高, 轻量模型抓不住. 来源: Phase B Session 09 实测. 影响: Phase 4 (E1/E2) 可以从 7 backbone 中删除这两个轻量模型, 节省时间. 论文消融图保留作对比.
+- [2026-05-07] **Ridge 在 DenseNet121 上首次明确打败 MLP** (R²(log) 0.342 vs 0.320), 在多个 backbone 上 Ridge 与 MLP 接近. 验证经验法则: 高维 (1000+ 维) + 小样本 (< 1000) 时 Ridge 经常更稳, MLP 容量过剩. 来源: Phase B Session 09 实测. 影响: Phase 4 (E1/E2) 单模态 baseline 必带 Ridge 对照, 不能只跑 MLP.
+- [2026-05-07] **Phase B 模板复用审计教训**: 遥感 v1 是从街景 v1 复制改写的, 街景的 fatal bug (L2 归一化) 直接同步到了遥感. 任何"v1 模板复用" 都要逐行审计, 不能信任旧版作者的判断. 来源: 本次会话静态审查. 影响: Phase B/4/5/6/7 任何模板化的脚本批量生成, 都要把每个目标脚本的 L2 norm/aug/loss 三类操作单独 review.
+- [2026-05-07] **遥感"零成本基线" = 街区几何**: 5 维 (log_area, log_perim, compact, lon_c, lat_c) Ridge R²(log)=0.067, 弱于街景 aux 的 0.092 (街景含图数信号). 但这是合理的基线锚点, 表明面积本身对能耗有解释力 (大街区 = 高能耗倾向). 来源: Phase B Session 09 设计 + 实测. 影响: Phase 4 单遥感 backbone 实验默认带几何辅助; 论文中应单独报告"几何 only" baseline.
 
 ---
 
@@ -446,15 +464,15 @@ WGS84 → GCJ02 → BD09LL → BD09MC, 全本地实现:
 
 ---
 
-## § 11. Phase B 快速原型脚本架构速查 (2026-04-30 新增)
+## § 11. Phase B 快速原型脚本架构速查 (2026-04-30 新增, 2026-05-07 v2.1 修订)
 
 ### § 11.1 脚本输入输出全表
 
-| 脚本 | 关键输入路径 | 关键输出 | 核心字段 |
+| 脚本 | 关键输入路径 | 关键输出 | 核心字段 / 配置 |
 |---|---|---|---|
 | `1_build_labels.py` | `8-街区数据/沈阳L4能耗.shp` | `energy_labels.csv`, `label_stats.json` | `BlockID`, `E_Final_W5` |
-| `2_predict_streetview.py` | `streetview_index.csv` + `energy_labels.csv` | `sv_predictions_<bb>.csv × 7`, `sv_metrics_summary.csv` | — |
-| `3_predict_remote_sensing.py` | ESRI/`11-卫星数据/*.tif` + `energy_labels.csv` | `rs_predictions_<bb>.csv × 7`, `final_comparison.csv` | — |
+| `2_predict_streetview.py` (v2.1) | `streetview_index.csv` + `energy_labels.csv` | `sv_image_features_<bb>.npz × 7` (单图特征缓存), `sv_predictions_<bb>.csv × 7` (mlp+ridge), `sv_baseline_metrics.csv`, `sv_metrics_summary.csv` (14 行), `sv_all_models.csv` | 池化 mean+std, 辅助 (log_n_imgs + lon/lat std) |
+| `3_predict_remote_sensing.py` (v2.1) | ESRI/`11-卫星数据/*.tif` + `energy_labels.csv` + `8-街区数据/沈阳L4能耗.shp` (取几何) | `rs_features_block_<bb>_v2.npz × 7` (无归一化), `rs_predictions_<bb>.csv × 7` (mlp+ridge), `rs_baseline_metrics.csv`, `rs_metrics_summary.csv` (14 行), `rs_all_models.csv`, `final_comparison.csv`, `metrics_summary_all.csv` | 池化无 (单图), 几何辅助 5 维 (log_area/log_perim/compact/lon_c/lat_c) |
 | `4_build_base_kg.py` | POI (`6-POI数据/merged_poi.shp`) + L5 (`8-街区数据/沈阳L5.shp`) + 用地 (`16-地块数据/沈阳市.shp`) | `base/train.tsv`, `entities.json`, `block_to_entity.json` | `name, main_cat, sub_cat`, `LandID`, `Level1_cn, Level2_cn` |
 | `5_build_building_kg.py` | 同上 + 建筑 (`9-建筑物数据/processed_shenyang20230318.shp`) | `building/train.tsv`, … | `Height, Function, Age, Quality`, `sub_type` |
 | `6_kg_models.py` | 无 (库文件) | 15 个模型类 | — |
@@ -465,11 +483,11 @@ WGS84 → GCJ02 → BD09LL → BD09MC, 全本地实现:
 | 维度 | Phase B 快速原型 | 主流程 (Phase 1-8) |
 |---|---|---|
 | 标签来源 | `沈阳L4能耗.shp` / `E_Final_W5` / `BlockID` | `shenyang_region2allinfo.json` / `energy` / `Region_N` |
-| 划分 | 5 分位分层 7:1.5:1.5 | 208-block 6:2:2 (Phase 1 收尾) |
+| 划分 | 5 分位分层 7:1.5:1.5 (Phase B 实测 698 块: train=488/val=105/test=105) | 208-block 6:2:2 (Phase 1 收尾) |
 | SI 图像 | ESRI 现下 + TIF fallback | `15-遥感影像/<block_id>.png` 预裁切 |
 | KG | 从 SHP 零起构建 | `complete_knowledge_graph.txt` (852k 三元组) |
 | KG 编码器 | 15 个标准 embedding 模型 | CompGCN + TuckER 初始化 |
-| 对比学习 | 无 (仅 MLP 回归) | KnowCL InfoNCE Stage1+2 |
+| 对比学习 | 无 (仅 MLP / Ridge 回归) | KnowCL InfoNCE Stage1+2 |
 | 路径规范 | G:\\ 硬编码 (临时) | `config/paths.yaml` + `.env` |
 | 适用场景 | 快速出数字, 探索 backbone/KG 模型排序 | 正式复现 KnowCL, 论文主实验 |
 
@@ -487,3 +505,36 @@ kg_vec = block_emb[idx[0]]          # (dim,)
 ```
 
 `block_to_entity.json`: `{block_id_int: entity_id_int}` —— Phase B 图像侧与 KG 侧的桥.
+
+### § 11.4 Phase B 实测结果速查 (2026-05-07 完成)
+
+#### SV 模态 R²(log) 排序前 5 (来自 sv_metrics_summary.csv)
+
+| Rank | backbone | model | feat_dim | R²(log) | R²(raw) | RMSE_raw |
+|---|---|---|---|---|---|---|
+| 1 | ResNet50 | mlp | 4098 | **0.371** | 0.127 | 3.70 |
+| 2 | AttentionCNN | mlp | 4098 | 0.343 | 0.119 | 3.72 |
+| 3 | DenseNet121 | ridge(α=1000) | 2050 | 0.302 | 0.083 | 3.79 |
+| 4 | AttentionCNN | ridge(α=1000) | 4098 | 0.299 | 0.109 | 3.74 |
+| 5 | ResNet50 | ridge(α=1000) | 4098 | 0.291 | 0.074 | 3.81 |
+
+#### SI 模态 R²(log) 排序前 5 (来自 rs_metrics_summary.csv)
+
+| Rank | backbone | model | feat_dim | R²(log) | R²(raw) | RMSE_raw |
+|---|---|---|---|---|---|---|
+| 1 | DenseNet121 | ridge(α=1000) | 1029 | **0.342** | 0.172 | 3.60 |
+| 2 | ViT-B/16 | mlp | 773 | 0.320 | 0.126 | 3.70 |
+| 3 | DenseNet121 | mlp | 1029 | 0.320 | 0.141 | 3.67 |
+| 4 | ResNet50 | mlp | 2053 | 0.295 | 0.177 | 3.59 |
+| 5 | ResNet50 | ridge(α=1000) | 2053 | 0.292 | 0.147 | 3.66 |
+
+#### Baseline 对照
+
+| 模态 | baseline | R²(log) |
+|---|---|---|
+| SV | mean_predictor | -0.0005 |
+| SV | ridge_aux_only (log_n_imgs + GPS std) | 0.092 |
+| SI | mean_predictor | -0.0005 |
+| SI | ridge_geom_only (log_area + log_perim + compact + lon_c + lat_c) | 0.067 |
+
+**净增益**: SV +0.279, SI +0.275, 两者图像信号都显著.

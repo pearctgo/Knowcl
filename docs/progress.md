@@ -148,10 +148,6 @@
 
 ---
 
-<!--
-后续 session 都从这行下面 append.
--->
-
 ## 2026-04-26 · Session 05 · Phase 1.5 街景重采 — 走错路径 → 用户纠正 → 切回 mapsv0 内部端点
 
 - **Phase**: Phase 1.5 (新增) · 街景全量重采 — 代码完成, 等用户跑 smoke test.
@@ -249,3 +245,107 @@
   - 若 Phase 1.5 smoke test 回来, 根据 `panoid_hit_rate` 决定是否全跑
   - Phase 1 收尾: 运行 `make_block_whitelist.py` 生成 208-block 白名单
 - **Git**: `feat(phase-b): 7 standalone scripts — 7 backbone + 15 kg models + docs update`
+
+---
+
+## 2026-05-07 · Session 07 · Phase B 街景预测 v2 → v2.1 修 ridge 长度 bug, 精度翻倍验证
+
+- **Phase**: Phase B (并行轨道)
+- **Goal of this session**: 修 v1 R²(log)≈0.10 严重欠拟合
+- **Actions**:
+  - 诊断 v1 三大病灶: ① 单图 L2 归一化丢幅度 ② 单 mean pool 丢方差 ③ 无 baseline 对照
+  - v2 重写 `2_predict_streetview.py`: 取消预归一化 + mean+std 双池化 + 辅助统计特征 (log 图数 + lon/lat std) + 输入端 BN + Ridge 与 MLP 同表 + L0 自检 + 单图特征缓存
+  - v2 实测精度翻倍 (R²(log) 0.18→0.37) 但 Ridge 返回长度只有 test 集 → 保存阶段 "All arrays must be of the same length" → all_metrics 始终空 → 末尾 KeyError: 'R2_log'
+  - v2.1 修 fit_ridge 返回全长预测 + main 末尾防御性处理空 metrics + try-except 加 traceback
+  - L0 baseline (仅 log图数+GPS std Ridge) R²(log)=0.0923, 图像净增益 +0.28 (resnet50 mlp 0.371 - 0.092)
+  - 释明: 高维 + 小样本下 Ridge 经常打过 MLP, 同表对照是必须的
+- **Files produced/modified**:
+  - `phase_b_scripts/2_predict_streetview.py` · 重写 v2.1 (~510 行)
+- **Key findings** (待 append findings § 9):
+  - SV 模态最佳: ResNet50 R²(log)=0.371, AttentionCNN 0.343, 与 KnowCL 论文 SV R²~0.377 同量级
+  - 图像净增益 = backbone R² - 仅辅助特征 R² = 0.371 - 0.092 = +0.28 (信号显著)
+  - 街景采样质量 OK, 不需要换 DINOv2/CLIP
+  - v2 设计教训: 多输出函数返回时切片粒度要对齐, sklearn baseline 函数应统一返回全长, 算指标时切片
+- **Errors encountered**:
+  - v2 fit_ridge 只返回 test 预测但保存时与全长 mlp_pred 同 DataFrame → 长度冲突 → main 末尾 KeyError. 已记 task_plan Errors.
+- **Open issues**:
+  - 用户 v2.1 重跑 (磁盘缓存, < 5 分钟) 验证 metrics summary 落盘
+  - Ridge 在部分 backbone 接近 MLP, 说明 MLP 容量够大可能轻微过拟合
+- **Next session**: 跑 3_predict_remote_sensing.py, 看 SI 是否如预期高于 SV
+- **Git**: `fix(phase-b/sv): v2.1 ridge full-set predict + defensive empty-metrics`
+
+---
+
+## 2026-05-07 · Session 08 · Phase B 遥感预测 v2.1 — 与街景同源 bug 修复 + 几何辅助特征
+
+- **Phase**: Phase B (并行轨道)
+- **Goal of this session**: 检查 3_predict_remote_sensing.py 与街景 v1 同源的 L2 归一化 bug, 升级到 v2.1 与街景对齐
+- **Actions**:
+  - 静态审查 3_predict_remote_sensing.py 找出 6 个问题:
+    ① L367 单图 L2 归一化丢幅度 (与街景 v1 同款 fatal bug)
+    ② 缺 L0 baseline self-check
+    ③ MLP 旧超参 (dropout 0.3 / wd 1e-4 / lr 1e-3 / batch 32)
+    ④ 无 Ridge 对照
+    ⑤ print_full_comparison 与街景 v2.1 schema (含 model/R2_norm) 不兼容
+    ⑥ final_comparison 列命名冲突
+  - 重写 3_predict_remote_sensing.py v2.1 (~660 行):
+    * 删除归一化, cache 改名 _v2.npz 自动绕开 v1 旧缓存
+    * MLP 升级到 v2.1 同款 (BN 输入 + 256→64 + dropout 0.5 + wd 1e-3 + lr 5e-4 + batch 64)
+    * 加几何辅助特征 5 维 (log 面积/周长 + 紧凑度 + 中心经纬度) 替代街景的"图数+GPS std"
+    * 加 L0 baseline (均值 + 几何辅助 Ridge)
+    * 加 Ridge 与 MLP 同表对照, 全样本预测以保对齐
+    * metrics_summary 增加 model 和 R2_norm 列, 与街景 v2.1 schema 完全一致
+    * final_comparison 列前缀统一 sv_<bb> / rs_<bb>
+    * AST 语法检查通过
+  - 阐明遥感 vs 街景架构差异: 遥感单图无法 mean+std 池化, 改走"几何辅助"路线
+- **Files produced/modified**:
+  - `phase_b_scripts/3_predict_remote_sensing.py` · 重写 v2.1 (~660 行)
+- **Key findings** (待 append findings § 9):
+  - 遥感 v1 与街景 v1 共享同一行 L2 归一化 bug — Phase B 单图 backbone 流水线模板都需要审计
+  - 遥感"零成本基线" = 街区几何 (面积是能耗的强基线), 区别于街景的"图数+GPS std"
+  - sv_metrics_summary 和 rs_metrics_summary 已用同一 schema (含 model/R2_norm), 可直接 concat
+- **Errors encountered**:
+  - L2 归一化 bug 被 v1 模板从街景复制到遥感 — 模板复用时要审计每行
+- **Open issues**:
+  - 用户跑 v2.1 后回填 R²(log) 数字, 验证 SV < SI 不等式
+  - cache 改名 _v2.npz 后第一次跑会重新提 7 backbone × 698 张图 ≈ 30-40 分钟 GPU
+  - 几何辅助 Ridge baseline R²(log) 期望 0.10-0.20 (面积是强基线)
+- **Next session**: 用户回填 v2.1 结果 → 进入 Phase B KG 轨道 (4_build_base_kg → 7_train_kg)
+- **Git**: `fix(phase-b/rs): v2.1 drop L2 norm + geom aux + ridge + L0 baseline + schema align`
+
+---
+
+## 2026-05-07 · Session 09 · Phase B 遥感 v2.1 实测落盘 + SV/SI 对比定调 + CLAUDE.md L2 戒律新增
+
+- **Phase**: Phase B (并行轨道) — Step 2 (SV) 和 Step 3 (SI) 均已实测完成
+- **Goal of this session**: 用户跑通遥感 v2.1, 评估是否需要继续优化, 定调进入 KG 轨道; 同步更新 4 文档.
+- **Actions**:
+  - 用户实测遥感 v2.1: 7 backbone × {mlp, ridge} = 14 行 metrics 完整落盘
+  - 排序结果: densenet121 ridge R²(log)=0.342 (头) → mobilenet_v3_large mlp 0.162 (尾)
+  - 对比街景 v2.1: SV 最佳 resnet50 mlp R²(log)=0.371; SI 最佳 densenet121 ridge 0.342
+  - 关键发现: log 空间 SV (0.371) > SI (0.342), raw 空间 SI (0.172) > SV (0.127), 两者总体水平相当, **沈阳能耗任务上 SV < SI 等级不严格成立** — 与 KnowCL 论文 § 5.2 "城市/指标偏好不同" 一致
+  - 几何辅助 baseline R²(log)=0.067, 图像净增益 +0.275 ✓ 显著
+  - 决策: 单模态精度已合格 (远超 0.05 健康阈值, 接近 KnowCL 纽约 SV R²=0.377 量级), 不再优化, 进入 KG 轨道
+  - CLAUDE.md § 9 L2 段追加第 4 项戒律: 单图 backbone 特征聚合前不要做 L2 归一化 (此前 sv/rs v1→v2 都验证了)
+  - 同步全量更新 progress.md (本条) / task_plan.md (Phase B 步骤打勾, Decisions +2, Errors 维持) / findings.md (§ 9 +5 条 + § 11.1 表更新)
+- **Files produced/modified**:
+  - `docs/progress.md` · 追加本条 (Session 09)
+  - `docs/task_plan.md` · 修改 (Phase B 步骤 2-3 标 ✅ 已实测, Decisions +2 行, 当前活动 Phase 更新)
+  - `docs/findings.md` · 修改 (§ 9 +5 条 sv+rs v2.1 实测发现, § 11.1 表 rs 行新增列)
+  - `docs/CLAUDE.md` · 修改 (§ 9 L2 第 4 项追加, § 11 硬约束 + 1 条 v1 模板审计)
+- **Key findings** (已 append 到 findings.md § 9):
+  - 沈阳能耗任务 SV < SI 等级不严格成立 (log 空间 SV 略胜, raw 空间 SI 略胜), 与论文 § 5.2 一致
+  - 轻量 backbone (MobileNetV3, EfficientNet-B0) 在单图遥感 + 224 patch 上明显垫底 (R²(log) 0.16-0.18 vs 其他 0.29-0.34)
+  - Ridge 在 DenseNet121 上首次明确打败 MLP (0.342 vs 0.320), 验证"高维+小样本 Ridge 常更稳"经验法则
+  - 遥感几何辅助 baseline R²(log)=0.067, 弱于街景 aux 的 0.092 (街景含图数信号)
+  - L2 归一化在单图特征聚合阶段是反向操作 (论文里只在 InfoNCE 投影头之后才归一化)
+- **Errors encountered**: 无新增 — 用户的 v2.1 跑通无 bug
+- **Open issues**:
+  - ⚠️ Phase B Step 1 标签对账 (E_Final_W5 vs energy) 仍然挂着 — 进入 KG 轨道前应该再确认一次
+  - rs_predictions_<bb>.csv 现在含 mlp_pred_energy + ridge_pred_energy 两列, 下游融合阶段决定用哪一列要明确写 (建议 densenet121 ridge 作为 SI 模态代表)
+  - DINOv2 / CLIP / 多池化 spatial mean+max+std 等进一步优化方向已记录, 当前不做
+- **Next session**:
+  - 进入 Phase B Step 4: 跑 `4_build_base_kg.py` → 看 base KG 三元组规模 + entities/relations 分布
+  - 然后 5_build_building_kg.py / 6_kg_models.py 自测 / 7_train_kg.py 跑 15 模型 link prediction
+  - 出 `metrics_summary.csv` (15 KG 模型 MRR/Hits@K) + `embeddings_<model>.npz` 以备融合阶段用
+- **Git**: `docs(phase-b): session 09 sv+rs v2.1 results landed + claude L2 guard + 4-doc sync`

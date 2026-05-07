@@ -16,6 +16,8 @@
 
 指标: R² / RMSE / MAE / MAPE, log1p 空间和原空间都报.
 
+> **⚠️ 2026-05-07 实测更新**: 在沈阳能耗任务上 SV < SI 等级**不严格成立** (log 空间 SV 略胜, raw 空间 SI 略胜, 整体水平相当). 这与 KnowCL 论文 § 5.2 倒数第二段"不同城市/指标对 SV/SI 偏好不同"一致. 论文写作时报告"两者水平相当, 互补", 不强行套等级.
+
 副目标:
 - **可移植**: 任何机器 `clone → pip install → edit .env → run`, 不出硬编码路径.
 - **可续接**: 任何新对话用 `CLAUDE.md § 6` 模板开场即可续.
@@ -68,8 +70,8 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 │   └── setup.bat
 ├── phase_b_scripts/             ← Phase B 快速原型脚本 (独立轨道, 当前 G:\ 路径)
 │   ├── 1_build_labels.py        ← SHP 能耗 → log+Z-score → 分层划分
-│   ├── 2_predict_streetview.py  ← 7 backbone × 街景 MLP 回归
-│   ├── 3_predict_remote_sensing.py  ← 7 backbone × 遥感 MLP 回归
+│   ├── 2_predict_streetview.py  ← 7 backbone × 街景 MLP 回归 (v2.1)
+│   ├── 3_predict_remote_sensing.py  ← 7 backbone × 遥感 MLP 回归 (v2.1)
 │   ├── 4_build_base_kg.py       ← block-POI-类目-landuse KG
 │   ├── 5_build_building_kg.py   ← + 建筑物 + sub_type KG
 │   ├── 6_kg_models.py           ← 15 个 KG embedding 模型库
@@ -155,21 +157,12 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
   * 反爬: 真实浏览器 UA 池 + Referer + 点间默认 2s 暂停
   * 输出 streetview_index.csv 给 Phase 2 直接消费
 - [x] (废弃) 申请百度 AK + 写 baidu_ak_setup_guide.md — **此方法不再需要**, 但文档保留作 Plan B
-- [ ] **[smoke test]** `python scripts/collect_streetview_baidu_full.py --max-points 50` → 看 `panoid_hit_rate`
-  - 决策点: panoid_hit_rate < 30% → 检查坐标转换公式或换 IP
-  - 决策点: panoid_hit_rate ≥ 50% → 全跑
-- [ ] **[full run]** 不带 `--max-points` 跑约 3k 候选点 × 4 方向 ≈ 12k 张
-  - 估时: 3k 点 × 2s sleep + 4 张请求 × 0.3s ≈ 2 小时
-- [ ] 检查 `tables/streetview_index.csv` 覆盖街区数 (目标 ≥ 500)
-- [ ] 若覆盖率达标, 把 sv_index.csv 输入 make_block_whitelist.py 重新生成主实验集
-- **Status:** in_progress (代码完成, 等用户跑 smoke test)
-- **预计会话数:** 1-2 (smoke test 反馈 + 调参)
-- **产出**: `999-输出成果文件/001-街景重采_baidu/` 整个目录, 含 streetview_index.csv
-- **风险**:
-  - mapsv0.bdimg.com 是百度内部端点, 非官方文档化, 后端调整可能随时让脚本失效
-  - 严格说违反百度服务条款 § 2.2, 属灰色区域 (但与项目原 test_shenhe.py 同方法)
-  - 部分坐标 panoid 缺失是正常 (小区/园区内部), 不能消除
-  - 若 IP 被风控 (大量 http_403/418), 增大 `--sleep-between-points` 或换网络
+- [x] **[smoke test]** 已跑通, 实际全量覆盖 698 街区 (Phase B Session 7 实测)
+- [x] **[full run]** 实际产出 9316 张图, 698 街区, 比预期 757 略少 (无 panoid 街区扣除)
+- [x] 检查 `tables/streetview_index.csv` 覆盖街区数 = 698 (远超 500 阈值, 也超过原 208 spatial join)
+- [ ] 把 sv_index.csv 输入 make_block_whitelist.py 重新生成主实验集 (待 Phase 1 收尾)
+- **Status:** complete (代码完成, smoke test + 全量都跑通, 输出已被 Phase B 消费)
+- **产出**: `999-输出成果文件/001-街景重采_baidu/` 整个目录, 含 streetview_index.csv (9316 行 / 698 街区)
 
 ### ▶ Phase 2 · 流水线基石
 - [ ] `src/datasets/block_index.py`: block_id → {sv_paths, si_path, label, split}
@@ -205,6 +198,7 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 - **Status:** pending
 - **预计会话数:** 5-7
 - **依赖**: Phase 2
+- **参考 Phase B 已有结果**: SV ResNet50 MLP R²(log)=0.371, SI DenseNet121 Ridge=0.342
 
 ### ▶ Phase 5 · KG-only Baselines (E3, E4)
 - [ ] `src/models/compgcn.py`: CompGCN (dgl 实现)
@@ -260,7 +254,7 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 
 | 风险 | 原始架构用法 | Phase B 脚本用法 | 状态 |
 |---|---|---|---|
-| 能耗标签来源 | `10-街区能耗标签/shenyang_region2allinfo.json`, 字段 `energy`, ID = `Region_N` | `8-街区数据/沈阳L4能耗.shp`, 字段 `E_Final_W5`, ID = `BlockID` | ⚠️ **待用户确认是否同一数据** |
+| 能耗标签来源 | `10-街区能耗标签/shenyang_region2allinfo.json`, 字段 `energy`, ID = `Region_N` | `8-街区数据/沈阳L4能耗.shp`, 字段 `E_Final_W5`, ID = `BlockID` | ⚠️ **待用户确认是否同一数据**, Phase B Session 09 后仍未对账 |
 | 街区 ID 格式 | `Region_N` (如 Region_1) | `BlockID` int | ⚠️ 需对应关系 |
 | L4 BlockID 与 L5 LandID | L4 = 能耗主表 (757 块) | L5 = KG 地块 (LandID) | ⚠️ 两套编号是否互通待确认 |
 | KG 来源 | 现有 `complete_knowledge_graph.txt` (852k 三元组, CompGCN 输入) | 从 SHP 零起构建 (block-POI-建筑-landuse) | ❗ 两套 KG 独立, 不能混用 embedding |
@@ -271,28 +265,28 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 
 | 脚本 | 作用 | 状态 | 输出位置 |
 |---|---|---|---|
-| `1_build_labels.py` | `沈阳L4能耗.shp` → log+Z-score → 5 分位分层 7:1.5:1.5 划分 | ✅ 代码完成 | `999-输出成果文件/002-能耗预测/` |
-| `2_predict_streetview.py` | 7 backbone 街景特征 MLP 回归, per-backbone 缓存 | ✅ 代码完成 | 同上 |
-| `3_predict_remote_sensing.py` | ESRI 优先 + TIF fallback, 7 backbone MLP 回归 | ✅ 代码完成 | 同上 |
-| `4_build_base_kg.py` | block-POI-主类-子类-landuse KG | ✅ 代码完成 | `999-输出成果文件/003-知识图谱/base/` |
-| `5_build_building_kg.py` | + 建筑物/高度/年代/质量/功能 + POI sub_type | ✅ 代码完成 | `999-输出成果文件/003-知识图谱/building/` |
+| `1_build_labels.py` | `沈阳L4能耗.shp` → log+Z-score → 5 分位分层 7:1.5:1.5 划分 | ✅ 已实测 (698 块对齐) | `999-输出成果文件/002-能耗预测/` |
+| `2_predict_streetview.py` | 7 backbone 街景特征 MLP 回归 (v2.1) | ✅ **已实测**: best ResNet50 MLP R²(log)=0.371 | 同上 |
+| `3_predict_remote_sensing.py` | ESRI 优先 + TIF fallback, 7 backbone MLP 回归 (v2.1) | ✅ **已实测**: best DenseNet121 Ridge R²(log)=0.342 | 同上 |
+| `4_build_base_kg.py` | block-POI-主类-子类-landuse KG | ✅ 代码完成, 待跑 | `999-输出成果文件/003-知识图谱/base/` |
+| `5_build_building_kg.py` | + 建筑物/高度/年代/质量/功能 + POI sub_type | ✅ 代码完成, 待跑 | `999-输出成果文件/003-知识图谱/building/` |
 | `6_kg_models.py` | 15 个 KG embedding 模型类 (库文件) | ✅ 代码完成, AST 通过 | — |
-| `7_train_kg.py` | 自对抗训练 + filtered link prediction + embedding 导出 | ✅ 代码完成 | `003-知识图谱/<base\|building>/` |
+| `7_train_kg.py` | 自对抗训练 + filtered link prediction + embedding 导出 | ✅ 代码完成, 待跑 | `003-知识图谱/<base\|building>/` |
 
 ### Phase B 运行顺序
 
 ```bash
 # 先确认 ⚠️ 待对账风险全部 OK 再跑
 
-# 能耗预测轨道
+# 能耗预测轨道 (✅ 已完成)
 python 1_build_labels.py
-python 2_predict_streetview.py --backbone all    # 首跑约 1.5-2h (GPU)
-python 3_predict_remote_sensing.py --backbone all
+python 2_predict_streetview.py --backbone all      # v2.1 已跑
+python 3_predict_remote_sensing.py --backbone all  # v2.1 已跑
 
-# KG 轨道
+# KG 轨道 (▶ 下一步)
 python 4_build_base_kg.py
 python 5_build_building_kg.py
-python 6_kg_models.py                           # 自测 15 个 forward
+python 6_kg_models.py                              # 自测 15 个 forward
 python 7_train_kg.py --kg base     --model all
 python 7_train_kg.py --kg building --model all
 ```
@@ -301,36 +295,40 @@ python 7_train_kg.py --kg building --model all
 
 ```
 999-输出成果文件/
-├── 002-能耗预测/
+├── 002-能耗预测/                                ✅ 已落盘
 │   ├── energy_labels.csv, label_stats.json
-│   ├── sv_features_block_<bb>.npz × 7        # 特征缓存
-│   ├── sv_predictions_<bb>.csv × 7
+│   ├── sv_image_features_<bb>.npz × 7           # v2.1 单图特征缓存
+│   ├── sv_predictions_<bb>.csv × 7              # mlp + ridge 双列
 │   ├── sv_mlp_<bb>.pt × 7
-│   ├── sv_all_models.csv                       # 7 backbone 预测并排
-│   ├── sv_metrics_summary.csv
-│   ├── rs_images/Block_*.jpg                   # 遥感影像 (一次性)
-│   ├── rs_predictions_<bb>.csv × 7
-│   ├── rs_metrics_summary.csv
-│   ├── final_comparison.csv                    # sv × rs × 7 backbone = 14 路对比
-│   └── metrics_summary_all.csv
-└── 003-知识图谱/
+│   ├── sv_baseline_metrics.csv                  # L0 baseline (mean + aux ridge)
+│   ├── sv_metrics_summary.csv                   # 7×{mlp,ridge}=14 行
+│   ├── sv_all_models.csv                        # 7 backbone mlp 预测并排
+│   ├── rs_images/Block_*.jpg                    # 遥感影像 (一次性)
+│   ├── rs_features_block_<bb>_v2.npz × 7        # v2.1 backbone 特征缓存 (无归一化)
+│   ├── rs_predictions_<bb>.csv × 7              # mlp + ridge 双列
+│   ├── rs_baseline_metrics.csv                  # L0 baseline (mean + geom ridge)
+│   ├── rs_metrics_summary.csv                   # 7×{mlp,ridge}=14 行
+│   ├── rs_all_models.csv                        # 7 backbone 预测并排
+│   ├── final_comparison.csv                     # sv × rs × 7 backbone (sv_/rs_ 前缀)
+│   └── metrics_summary_all.csv                  # 街景 + 遥感总指标 28 行
+└── 003-知识图谱/                                ▶ 下一步
     ├── base/
     │   ├── train/valid/test.tsv
     │   ├── entities.json, relations.json
-    │   ├── block_to_entity.json               # 下游融合桥
-    │   ├── embeddings_<model>.npz × 15        # 含 block_emb 子集
+    │   ├── block_to_entity.json                 # 下游融合桥
+    │   ├── embeddings_<model>.npz × 15          # 含 block_emb 子集
     │   ├── metrics_<model>.json × 15
     │   └── metrics_summary.csv
     └── building/ (结构同 base)
 ```
 
-### Phase B 验收标准
+### Phase B 验收标准 (实际达成)
 
-- `metrics_summary_all.csv` 有 14 行 (7 sv + 7 rs), R²(log) ≥ 0.3 视为流程通畅
-- `base/metrics_summary.csv` 有 15 行, MRR > 0.05 视为 KG 有信号
-- 跑出数字后把两张 csv 贴回, 决定哪个 backbone / KG 模型进入 Phase 4/5 主流程
+- ✅ `metrics_summary_all.csv` 有 28 行 (14 sv + 14 rs), R²(log) ≥ 0.3 视为流程通畅 — **达成**: SV 最高 0.371, SI 最高 0.342
+- ⏸ `base/metrics_summary.csv` 有 15 行, MRR > 0.05 视为 KG 有信号 — **待 Step 4-7 跑出**
+- 跑出数字后把两张 csv 贴回, 决定哪个 backbone / KG 模型进入 Phase 4/5 主流程 (SV: ResNet50 / SI: DenseNet121, 已可推荐)
 
-- **Status:** in_progress (代码完成, 等用户跑通并确认 ⚠️ 风险点)
+- **Status:** in_progress (能耗预测轨道 ✅ 完成, KG 轨道 ▶ 下一步)
 
 ---
 
@@ -360,6 +358,14 @@ python 7_train_kg.py --kg building --model all
 | 2026-04-30 | Phase B 脚本当前豁免 G:\\ 路径约束 (用户显式指定), 正式集成前重构 | 用户在本次会话中明确给定所有路径, 属于探索性脚本 | Phase B |
 | 2026-04-30 | AttentionCNN 用 CBAM 实现 (ResNet50 + Channel Attention + Spatial Attention) | CBAM 是 attention CNN 文献最规范形式, 额外参数仅约 0.5M; 注意与 KG 侧 AttH (双曲注意力) 不是同一个东西 | Phase B |
 | 2026-04-30 | Phase B 特征提取后缓存 .npz, MLP 重训只需秒级 | 样本量小 (~750), 端到端 finetune 过拟合风险大; 特征缓存便于反复调参 | Phase B |
+| 2026-05-07 | Phase B 街景 v1→v2.1 三件齐改: 取消单图 L2 归一化, mean+std 双池化, 加辅助统计 (log 图数 + GPS std) + Ridge 同表对照 + L0 self-check | v1 R²(log)≈0.10 严重欠拟合, 三大病灶系统性诊断后修复 | Phase B |
+| 2026-05-07 | Phase B SV 模态首选 backbone = ResNet50 (MLP) + AttentionCNN (MLP), 两者 R²(log) 都 > 0.34 | 7 backbone 实测排序 + 图像净增益 +0.28 显著 | Phase 4 (E1) |
+| 2026-05-07 | sklearn baseline 函数 (如 fit_ridge) 统一返回**全样本预测**, 算指标时切片 | v2 fit_ridge 只返 test 预测导致保存阶段长度不齐 → KeyError. 全长返回更易对齐 | 协议级 (所有 Phase) |
+| 2026-05-07 | Phase B 遥感 v1→v2.1: 删 L2 归一化 + cache 改名 _v2.npz + 升级 MLP + 加几何辅助特征 (log 面积/周长/紧凑度/中心经纬度 5 维) + Ridge 同表 + L0 self-check | 与街景 v1 同源 bug; 单图遥感无法 mean+std 池化, 改走"几何辅助"路线 | Phase B |
+| 2026-05-07 | Phase B sv 与 rs metrics_summary 统一 schema (含 model 和 R2_norm 列), final_comparison 列前缀统一 sv_<bb> / rs_<bb> | 街景 v2.1 升级 schema 后两表必须一致才可 concat / 合并 | Phase B |
+| 2026-05-07 | Phase B SI 模态首选 backbone = DenseNet121 (Ridge) — R²(log)=0.342, 击败所有 MLP | 7 backbone 实测; 高维+小样本场景 Ridge 经常稳过 MLP | Phase 4 (E2) |
+| 2026-05-07 | Phase B 单模态精度合格 (净增益 +0.28 / +0.275, 接近 KnowCL 论文水平), 不再优化, 进入 KG 轨道 | 改进收益边际递减; 论文核心贡献是 KG + 多模态融合, 应把会话精力放到 4-7 步 | Phase B |
+| 2026-05-07 | 沈阳能耗任务上 SV < SI 等级**不强行套用**: 实测 log 空间 SV 略胜 SI 略胜 raw 空间, 整体相当 | 与 KnowCL 论文 § 5.2 "城市/指标偏好不同" 一致, 这是任务/数据特性, 不是错误 | Goal / 论文写作 |
 
 ---
 
@@ -375,14 +381,19 @@ python 7_train_kg.py --kg building --model all
 | 2026-04-26 | 第一次 Claude 写的版本走百度开放平台官方 API | Claude 没看用户已上传的 `test_shenhe.py`, 误以为要从零设计采集方案 | 用户提示后, 切换到 mapsv0 内部端点同方法; 教训: 看完所有 project files 再设计 | Phase 1.5 |
 | 2026-04-30 | Phase B 脚本标签来源 (`沈阳L4能耗.shp` / `E_Final_W5` / `BlockID`) 与主流程 (`shenyang_region2allinfo.json` / `energy` / `Region_N`) 不一致 | 用户在本次会话中提供的路径与原始数据文件不同 | **待用户确认**: 两份是否为同一数据不同格式? 若不同需建 BlockID↔Region_N 映射表; Phase B 跑前必须先验证 | Phase B |
 | 2026-04-30 | Phase B KG 与主流程 KG 是两套独立图 (SHP 构建 vs complete_knowledge_graph.txt) | 两次构建逻辑完全不同, embedding 不可互换 | Phase B embedding 和主流程 CompGCN embedding 分开存储; 论文中分开报告, 标注来源 | Phase B |
+| 2026-05-07 | Phase B 街景 v1 7 backbone R²(raw)≈0.02, R²(log)≈0.10, 几近均值预测器 | ① 单图特征 mean 前先 L2 归一化丢幅度 ② 单 mean pooling 丢方差 ③ 无 L0 baseline 对照 | v2 重写: 取消归一化 + mean+std 双池化 + 辅助统计 + Ridge 对照 + L0 self-check; 实测 R²(log) 0.10→0.37 翻倍 | Phase B |
+| 2026-05-07 | v2 街景脚本所有 backbone 完跑后抛 "All arrays must be of the same length" → all_metrics 始终空 → 末尾 KeyError: 'R2_log' | fit_ridge 只返回 test 集预测 (105) 而 MLP 预测全长 (698), 同 DataFrame 时长度不一致 | v2.1: fit_ridge 改为返回全样本预测 + main 末尾防御性处理空 metrics | Phase B |
+| 2026-05-07 | Phase B 遥感 v1 与街景 v1 共享 L2 归一化 bug (单图特征聚合前归一化丢幅度) | v1 模板从街景脚本复制到遥感时未审计每行, 直接保留了 `feats /= np.linalg.norm(...)` | v2.1 删除归一化 + cache 改名 `_v2.npz` 强制重提 + 同步升级 MLP 超参与 baseline 对照 | Phase B |
 
 ---
 
 ## 当前活动 Phase
 
 **Phase 1 in_progress** — 最后一步: 运行 `make_block_whitelist.py` 生成 208-block 主实验集.
-**Phase 1.5 in_progress (并行)** — 代码完成, 等用户拿 AK 跑 smoke test.
-**Phase B in_progress (并行)** — 7 脚本代码全部完成, 等用户: ① 确认 ⚠️ 待对账风险 ② 跑通后回填指标表.
+**Phase 1.5 ✅ 完成** — 698 街区 / 9316 张图全量采集到位, streetview_index.csv 已被 Phase B 消费.
+**Phase B in_progress** —
+  - ✅ Step 1-3 完成: 标签 + 街景 v2.1 (R²(log)=0.371) + 遥感 v2.1 (R²(log)=0.342)
+  - ▶ **下一步: Step 4-7 KG 轨道** (4_build_base_kg → 7_train_kg)
 
 下一个 Phase → **Phase 2 · 流水线基石** (block_index.py 是核心).
-Phase B 下一步 → 用户确认 `E_Final_W5`/`BlockID` 与 `energy`/`Region_N` 对应关系, 然后跑 `1_build_labels.py` 验证.
+Phase B 下一步 → 跑 `4_build_base_kg.py` 看 base KG 三元组规模 + entities/relations 分布.

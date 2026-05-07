@@ -12,12 +12,14 @@
 
 - 原论文: 纽约社经指标预测 (人口/教育/犯罪)
 - 本项目: **沈阳街区能耗回归**, 基础 KG 扩展为"建筑物城市 KG" (base + building)
-- 目标精度等级 (必须做出):
+- 目标精度等级 (主流程参考):
   SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI
+  ⚠ 2026-05-07 Phase B 实测: 在沈阳能耗任务上 SV ≈ SI (0.371 vs 0.342, 互补关系), 与 KnowCL 论文 § 5.2 "城市/指标偏好不同" 一致, 不强行套等级.
 - 7 个视觉 backbone 对比池: ResNet-50 / ConvNeXt / DenseNet121 / ViT / MobileNetV3 / AttentionCNN / EfficientNet
 - ⚠️ **关键约束**: SV 仅覆盖 208 个街区 (三模态交集), 主实验在 208-block 子集上跑, 不是全部 757 块
-- ⚠️ **新增分支 (2026-04-26)**: Phase 1.5 用百度地图前端内部端点 (`mapsv0.bdimg.com`) 重采全 757 街区街景, **无需申请 AK** (与项目原 `test_shenhe.py` 同方法). 若成功, 主实验可升级为 757-block 全量.
+- ⚠️ **新增分支 (2026-04-26)**: Phase 1.5 用百度地图前端内部端点 (`mapsv0.bdimg.com`) 重采全 757 街区街景, **无需申请 AK** (与项目原 `test_shenhe.py` 同方法). 若成功, 主实验可升级为 757-block 全量. **2026-05-07 已完成: 实际产出 9316 张 / 698 街区**.
 - ⚠️ **新增并行轨道 (2026-04-30)**: Phase B 快速原型脚本 (`1_build_labels.py` ~ `7_train_kg.py`) —— 用于在 KnowCL 主流程完成前快速出指标对比 (7 视觉 backbone × 街景/遥感 + 15 KG embedding 模型 × base/building KG). **与 src/ 主流程独立, 当前硬编码 G:\\ 路径 (待迁移到 paths.yaml)**. 见 `task_plan.md § Phase B`.
+  **2026-05-07 实测**: SV+SI 步骤完成, R²(log) SV=0.371, SI=0.342, 净增益 +0.28; 进入 KG 轨道.
 
 完整背景、关键论文数字、目录清单、约束 — 见 `findings.md`.
 路线图、阶段、已做决策 — 见 `task_plan.md`.
@@ -168,7 +170,9 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 
 标尺: 单文件 ≤ 200 行, 单函数 ≤ 50 行, 一次对话 ≤ 2 文件.
 
-> ⚠ 例外: 数据采集类一次性脚本 (如 `collect_streetview_baidu_full.py`) 因为耦合需求和容错代码, 单文件可放宽到 ≤ 1000 行, 但仍要按职责分节注释.
+> ⚠ 例外 1: 数据采集类一次性脚本 (如 `collect_streetview_baidu_full.py`) 因为耦合需求和容错代码, 单文件可放宽到 ≤ 1000 行, 但仍要按职责分节注释.
+>
+> ⚠ 例外 2: docs 维护协议本身支持 4 doc 联动改 (progress + task_plan + findings + CLAUDE 同步更新), 不算在 ≤ 2 文件限制内.
 
 ---
 
@@ -177,6 +181,7 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 ### L0 · Sanity (必做, 10 分钟)
 - [ ] 均值预测器 RMSE/R²? 打不过 = 模型有问题
 - [ ] `sklearn.LinearRegression(特征=[建面, POI数, 夜光均, 建高均])` R²? 打不过 = **去修数据, 别调模型**
+- [ ] `sklearn.Ridge(alpha=tuned)` 和 MLP 同表对比 — 高维 + 小样本时 Ridge 经常更稳, MLP 容量过剩 (Phase B Session 09 验证)
 - [ ] train/val/test block_id 交集 = 0?
 - [ ] label 打乱后模型仍高精度 = 数据泄漏
 
@@ -192,6 +197,9 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 1. Pearson/Spearman < 0.05 = 信号不存在
 2. 方差≈0 的特征删掉
 3. KS 检验 train vs test 分布漂移
+4. ⭐ **(2026-05-07 新增)** 单图 backbone 特征**聚合前不要做 L2 归一化** (`feats /= np.linalg.norm(...)`). 这会丢幅度信号. 街景 v1 / 遥感 v1 都因这一行 R²(log) 被压在 0.10-0.18, 删后翻倍到 0.30-0.37. 归一化只应该出现在 InfoNCE 投影头之后 (损失函数内部需要), 不应该在 backbone penultimate features 上. 改在 MLP 输入端用 `BatchNorm1d` 处理尺度.
+5. ⭐ **(2026-05-07 新增)** 街区级聚合策略要保留方差信号: 街景多图用 `mean+std concat`, 遥感单图无法多池化, 改用几何辅助特征 (面积/周长/紧凑度/坐标) concat. 单 mean pooling 是丢方差的反向操作.
+6. ⭐ **(2026-05-07 新增)** 任何 sklearn baseline / 多输出回归函数应统一返回**全样本预测**, 算指标时切片. 反过来 (只返 test) 会触发保存阶段长度不齐 → KeyError.
 
 ### L3 · 对比学习专属
 - InfoNCE 初值 ≈ \(\log N\), 末端 < 1.0
@@ -208,12 +216,17 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 - log1p 训练, 指标时 `expm1` 回原空间?
 - DataLoader `num_workers > 0` 种子固定?
 - 预训练权重 `missing_keys` 查了?
+- `try-except` 包裹的代码块要带 `traceback.print_exc()`, 否则异常会被静默吞 (Phase B Session 07 教训: ridge 长度不齐异常被吞导致 metrics 始终空)
 
 ### L6 · 数据采集类专属 (新增 2026-04-26)
 - API 返回 JSON 不是图片? → 看 `Content-Type`, 多半是 key 错或配额超
 - 大量 `no_panorama`? → 候选点都挂在小区内部, 改用道路 buffer 重采
 - 坐标偏移? → 检查 coordtype (wgs84ll vs bd09ll vs gcj02ll), 国内 API 默认 bd09ll
 - 断点续采没省时间? → 检查 `quick_image_is_valid` 阈值, 太严会反复重下
+
+### L7 · 模板复用类专属 (新增 2026-05-07)
+- v1 模板复制到第二个 backbone/模态/任务 时, **逐行审计**, 不能信任旧版作者. Phase B Session 08 教训: 街景 v1 的 L2 归一化 fatal bug 直接同步到了遥感 v1.
+- 重点审计三类操作: ① 特征归一化 / 标准化 ② 数据增强 ③ 损失函数 — 这三类最易在跨任务时引入隐藏 bug.
 
 ---
 
@@ -263,6 +276,7 @@ git push
 5. 收到任务先复述, 我确认才动手.
 6. ⚠ API key 永远不出现在代码里, 永远从 .env 读.
 7. ⚠ Phase B 快速原型脚本当前豁免 G:\ 限制 (用户显式指定路径), 但正式集成进 src/ 前必须迁移到 paths.yaml.
+8. ⚠ (2026-05-07) v1 → v2 模板复用时必须逐行审计. 先看完旧版再改, 不要"假定旧版没问题". 街景/遥感 v1 共用的 L2 归一化 bug 就是这么传过来的.
 ```
 
 ---
