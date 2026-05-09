@@ -368,6 +368,10 @@ DATA_ROOT=
 - [2026-05-07] **Ridge 在 DenseNet121 上首次明确打败 MLP** (R²(log) 0.342 vs 0.320), 在多个 backbone 上 Ridge 与 MLP 接近. 验证经验法则: 高维 (1000+ 维) + 小样本 (< 1000) 时 Ridge 经常更稳, MLP 容量过剩. 来源: Phase B Session 09 实测. 影响: Phase 4 (E1/E2) 单模态 baseline 必带 Ridge 对照, 不能只跑 MLP.
 - [2026-05-07] **Phase B 模板复用审计教训**: 遥感 v1 是从街景 v1 复制改写的, 街景的 fatal bug (L2 归一化) 直接同步到了遥感. 任何"v1 模板复用" 都要逐行审计, 不能信任旧版作者的判断. 来源: 本次会话静态审查. 影响: Phase B/4/5/6/7 任何模板化的脚本批量生成, 都要把每个目标脚本的 L2 norm/aug/loss 三类操作单独 review.
 - [2026-05-07] **遥感"零成本基线" = 街区几何**: 5 维 (log_area, log_perim, compact, lon_c, lat_c) Ridge R²(log)=0.067, 弱于街景 aux 的 0.092 (街景含图数信号). 但这是合理的基线锚点, 表明面积本身对能耗有解释力 (大街区 = 高能耗倾向). 来源: Phase B Session 09 设计 + 实测. 影响: Phase 4 单遥感 backbone 实验默认带几何辅助; 论文中应单独报告"几何 only" baseline.
+- [2026-05-09] **KG 下游评估"作弊"判别准则** (本会话踩坑): 评估"KG 模型 X 的下游能力"时, 特征里**不能**包含非 X 直接产出的强信号. v4.2 默认 concat handcrafted (POI 类目计数 + 建筑统计 + 几何), 即使 X 是随机 emb 也能跑 R²(log) ≈ 0.2-0.3, 论文里站不住. 解法 (v4.3): 分层归因 4 组特征 (kg_only / kg_nbr / kg_nbr_topo / kg_oracle_handcraft), 主表只报前三组纯 KG, handcrafted 移到 `--include-oracle` ablation 标 "oracle". 同时加 `--plain-block-emb` 随机 emb 健康检查 (R² 应 ≈ 0). 来源: 用户 2026-05-09 驳回 + 本次重设计. 影响: CLAUDE.md § 9 L4 加第 5/6 项戒律, § 11 加第 9 条硬约束; 后续所有"评估某模块下游能力"都遵循此准则.
+- [2026-05-09] **1-hop 邻居聚合是合法 KG 信号, 不算作弊**: per-relation neighbor mean (32 × n_r 维) + log(1+deg) 直接从 KG 三元组计算, 等价于一层无参 R-GCN 聚合 (论文 § 2.3 CompGCN 第一层不用关系投影矩阵时退化为此). 这与"掺 handcrafted POI 计数"性质根本不同 (前者是图本身, 后者是预处理产出), 可以加进主表. 来源: KnowCL 论文 § 2.3 + GraphSAGE / CompGCN 公式. 影响: 7_v4.3 把 kg_nbr 和 kg_nbr_topo 与 kg_only 一起放主表, 论文里取 kg_nbr 或 kg_nbr_topo 作 KG 模型代表精度.
+- [2026-05-09] **KnowCL 跨模态对比学习的 SV image features 池化**: 街景 N 张图先经 backbone → mean+std 双池化 → per-block (2D 维), 然后送 InfoNCE 投影头. SI 单图直接送即可 (无池化). 这与 v2.1 单模态预测的池化策略**完全一致**, 因此 8_contrastive 直接消费 `sv_image_features_<bb>.npz` (逐图特征) 内部做池化, 消费 `rs_features_block_<bb>_v2.npz` (已 per-block) 直接用. 来源: KnowCL 论文 § 4.3.2 + 本次设计. 影响: 8_contrastive_kg_image.py 实现, 与 SV/SI 单模态精度公平对比.
+- [2026-05-09] **KnowCL 对比学习 batch 内三方交集要求**: labels ∩ image ∩ kg 三方 inner join 必须 ≥ 100 个 BlockID, 否则 InfoNCE batch (B=32) 内负样本太少, 退化为 batch normalization. Phase B 698 标签 × 698 街景 (重采后) × ~698 KG block ≈ 698, 安全; 主流程 208-block 子集 ≥ 100, 也安全, 但要监控 alignment + uniformity 防止模式崩溃. 来源: 本次设计. 影响: 8_contrastive 加了 `if len(common) < 100: raise` 的硬性检查.
 
 ---
 
@@ -473,10 +477,11 @@ WGS84 → GCJ02 → BD09LL → BD09MC, 全本地实现:
 | `1_build_labels.py` | `8-街区数据/沈阳L4能耗.shp` | `energy_labels.csv`, `label_stats.json` | `BlockID`, `E_Final_W5` |
 | `2_predict_streetview.py` (v2.1) | `streetview_index.csv` + `energy_labels.csv` | `sv_image_features_<bb>.npz × 7` (单图特征缓存), `sv_predictions_<bb>.csv × 7` (mlp+ridge), `sv_baseline_metrics.csv`, `sv_metrics_summary.csv` (14 行), `sv_all_models.csv` | 池化 mean+std, 辅助 (log_n_imgs + lon/lat std) |
 | `3_predict_remote_sensing.py` (v2.1) | ESRI/`11-卫星数据/*.tif` + `energy_labels.csv` + `8-街区数据/沈阳L4能耗.shp` (取几何) | `rs_features_block_<bb>_v2.npz × 7` (无归一化), `rs_predictions_<bb>.csv × 7` (mlp+ridge), `rs_baseline_metrics.csv`, `rs_metrics_summary.csv` (14 行), `rs_all_models.csv`, `final_comparison.csv`, `metrics_summary_all.csv` | 池化无 (单图), 几何辅助 5 维 (log_area/log_perim/compact/lon_c/lat_c) |
-| `4_build_base_kg.py` | POI (`6-POI数据/merged_poi.shp`) + L5 (`8-街区数据/沈阳L5.shp`) + 用地 (`16-地块数据/沈阳市.shp`) | `base/train.tsv`, `entities.json`, `block_to_entity.json` | `name, main_cat, sub_cat`, `LandID`, `Level1_cn, Level2_cn` |
+| `4_build_base_kg.py` | POI (`6-POI数据/merged_poi.shp`) + L5 (`8-街区数据/沈阳L5.shp`) + 用地 (`16-地块数据/沈阳市.shp`) | `base/train.tsv`, `entities.json`, `block_to_entity.json`, `block_features.csv` | `name, main_cat, sub_cat`, `LandID`, `Level1_cn, Level2_cn` |
 | `5_build_building_kg.py` | 同上 + 建筑 (`9-建筑物数据/processed_shenyang20230318.shp`) | `building/train.tsv`, … | `Height, Function, Age, Quality`, `sub_type` |
 | `6_kg_models.py` | 无 (库文件) | 15 个模型类 | — |
-| `7_train_kg.py` | `<base\|building>/train.tsv` + `6_kg_models.py` | `embeddings_<model>.npz` (含 `block_emb`), `metrics_summary.csv` | `--kg base\|building --model <name>\|all --dim 32` |
+| `7_train_kg.py` (v4.3, 2026-05-09 重设计) | `<base\|building>/train.tsv` + `6_kg_models.py` + `energy_labels.csv` | `embeddings_<model>.npz` (含 ent_emb/rel_emb + **block_id/block_emb 给 8_用**), `metrics_<model>.json` (4 组下游详细), `metrics_summary.csv` (每行 = kg/model/feature_set, 默认 3 行/模型) | `--kgs base,building --models all --include-oracle --plain-block-emb`; 4 组特征 = kg_only(d) / kg_nbr(d×n_r 加 d) / kg_nbr_topo(+n_r) / kg_oracle_handcraft(+handcrafted, 仅 oracle) |
+| `8_contrastive_kg_image.py` (v1.0, 2026-05-09 新增) 🆕 | `sv_image_features_<bb>.npz` 或 `rs_features_block_<bb>_v2.npz` + `embeddings_<kg_model>.npz` (block_id/block_emb 键) + `energy_labels.csv` | `contrastive/contrastive_<modality>_<bb>_<kg_model>.npz` (img_proj/kg_proj 投影后向量), `metrics_contrastive.csv` (每行 = modality/backbone/kg_model/head, 4 行/组合) | KnowCL Stage1+2: d_proj=128, hidden=256, batch=32, epochs=200, lr=3e-4, τ=0.07, 对称点积 InfoNCE; 4 head = baseline_raw_image / baseline_kg_only / contrastive_image / contrastive_concat |
 
 ### § 11.2 Phase B 与主流程对比
 
@@ -495,16 +500,25 @@ WGS84 → GCJ02 → BD09LL → BD09MC, 全本地实现:
 
 ```python
 import numpy as np
-# 加载 KG block embedding
-data = np.load("003-知识图谱/base/embeddings_rotate.npz")
-block_ids   = data["block_id"]      # (n_blocks,) int
-block_emb   = data["block_emb"]     # (n_blocks, dim) float32
-# 按 block_id 查找
-idx = np.where(block_ids == target_block_id)[0]
-kg_vec = block_emb[idx[0]]          # (dim,)
+# 加载 KG block embedding (7_v4.3 格式)
+data = np.load("003-知识图谱/base/embeddings/embeddings_rotate.npz")
+block_ids = data["block_id"]      # (n_blocks,) str, 已规范化
+block_emb = data["block_emb"]     # (n_blocks, dim) float32, 已按 block_id 排序
+# 直接在 8_contrastive 里用 block_id 与 image features 做 inner join
 ```
 
-`block_to_entity.json`: `{block_id_int: entity_id_int}` —— Phase B 图像侧与 KG 侧的桥.
+`block_to_entity.json`: `{block_id_int: entity_id_int}` —— 与 `block_index.tsv` 等价, 旧版回退用.
+
+### § 11.3.1 对比学习接口 (8_contrastive 输出, 给论文最终对比用)
+
+```python
+import pandas as pd
+df = pd.read_csv("003-知识图谱/metrics_contrastive.csv")
+# 每个 (modality, backbone, kg_model) 出 4 行 head
+# 论文核心数字取 head=='contrastive_concat' 的 R²(log)
+mask = df["head"] == "contrastive_concat"
+df[mask].sort_values("ridge_test_r2", ascending=False).head(10)
+```
 
 ### § 11.4 Phase B 实测结果速查 (2026-05-07 完成)
 

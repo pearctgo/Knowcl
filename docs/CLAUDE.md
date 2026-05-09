@@ -20,6 +20,7 @@
 - ⚠️ **新增分支 (2026-04-26)**: Phase 1.5 用百度地图前端内部端点 (`mapsv0.bdimg.com`) 重采全 757 街区街景, **无需申请 AK** (与项目原 `test_shenhe.py` 同方法). 若成功, 主实验可升级为 757-block 全量. **2026-05-07 已完成: 实际产出 9316 张 / 698 街区**.
 - ⚠️ **新增并行轨道 (2026-04-30)**: Phase B 快速原型脚本 (`1_build_labels.py` ~ `7_train_kg.py`) —— 用于在 KnowCL 主流程完成前快速出指标对比 (7 视觉 backbone × 街景/遥感 + 15 KG embedding 模型 × base/building KG). **与 src/ 主流程独立, 当前硬编码 G:\\ 路径 (待迁移到 paths.yaml)**. 见 `task_plan.md § Phase B`.
   **2026-05-07 实测**: SV+SI 步骤完成, R²(log) SV=0.371, SI=0.342, 净增益 +0.28; 进入 KG 轨道.
+- ⚠️ **Phase B 第 8 步追加 (2026-05-09)**: 新增 `8_contrastive_kg_image.py` (KnowCL 论文 § 4 Stage 1+2 实现) —— 这是项目核心目的: image (SV/SI) ↔ KG block embedding 跨模态对比学习, 对称点积 InfoNCE, τ=0.07. 输出 `metrics_contrastive.csv` 含 4 行/(modality,backbone,kg_model): `baseline_raw_image / baseline_kg_only / contrastive_image / contrastive_concat`. 完整精度等级 SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI 在三张表里就齐了 (SV/SI 在 `sv|rs_metrics_summary.csv`, KG 在 `metrics_summary.csv` 取 feature_set=B/C, +SV/+SI 在 `metrics_contrastive.csv` 取 head=contrastive_concat).
 
 完整背景、关键论文数字、目录清单、约束 — 见 `findings.md`.
 路线图、阶段、已做决策 — 见 `task_plan.md`.
@@ -210,6 +211,8 @@ pending ──开始做──▶ in_progress ──完成──▶ complete
 ### L4 · KG 质量
 - 平均实体度 < 3 = KG 太稀疏
 - KG emb concat 进线性回归: R² 无提升 = KG 挂错实体
+- ⭐ **(2026-05-09 新增) KG 下游评估"作弊"判别准则**: 评估"KG 模型 X 的下游能力"时, 特征**不能**包含非 X 直接产出的信号 (handcrafted POI 类目计数 / 建筑统计 / 几何这些是数据预处理产出, 不是 KG 模型产出). 若把 X 替换为**随机 emb** 后下游 R²(log) 仍 ≥ 0.2, 说明手工特征 / 标签泄漏 dominant, 不能算 KG 模型精度. **解法**: 7_v4.3 改成分层归因, 主表只报 `kg_only / kg_nbr / kg_nbr_topo` 三组纯 KG 特征 R², handcrafted 仅在 `--include-oracle` 下作 ablation 上界. 必须用 `--plain-block-emb` 跑随机健康检查, R² ≈ 0 才算下游链路对齐 OK.
+- ⭐ **(2026-05-09 新增) 1-hop 邻居聚合是合法 KG 信号**: per-relation neighbor mean + log(1+deg) 是从 KG 三元组直接计算的, 等价于一层无参 R-GCN 聚合, 仍属"KG 模型在该图上的输出". 这与"掺 handcrafted 特征"在性质上根本不同, 可以加进主表.
 
 ### L5 · 代码 bug
 - `model.eval()` 切了?
@@ -277,6 +280,7 @@ git push
 6. ⚠ API key 永远不出现在代码里, 永远从 .env 读.
 7. ⚠ Phase B 快速原型脚本当前豁免 G:\ 限制 (用户显式指定路径), 但正式集成进 src/ 前必须迁移到 paths.yaml.
 8. ⚠ (2026-05-07) v1 → v2 模板复用时必须逐行审计. 先看完旧版再改, 不要"假定旧版没问题". 街景/遥感 v1 共用的 L2 归一化 bug 就是这么传过来的.
+9. ⚠ (2026-05-09) **评估"模型 X 的下游能力"时, 特征里不能掺非 X 直接产出的信号**. 评估 KG 模型时不混 handcrafted, 评估 image backbone 时不混 KG, 评估对比学习模块时基线必须显式分离. 任何"混合特征"都必须放进 ablation 表显式标 oracle, 不能进主表打分. 否则视作"作弊", 论文里站不住.
 ```
 
 ---

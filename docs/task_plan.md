@@ -266,12 +266,13 @@ shenyang-energy-kg/              ← 代码仓库, 入 Git
 | 脚本 | 作用 | 状态 | 输出位置 |
 |---|---|---|---|
 | `1_build_labels.py` | `沈阳L4能耗.shp` → log+Z-score → 5 分位分层 7:1.5:1.5 划分 | ✅ 已实测 (698 块对齐) | `999-输出成果文件/002-能耗预测/` |
-| `2_predict_streetview.py` | 7 backbone 街景特征 MLP 回归 (v2.1) | ✅ **已实测**: best ResNet50 MLP R²(log)=0.371 | 同上 |
-| `3_predict_remote_sensing.py` | ESRI 优先 + TIF fallback, 7 backbone MLP 回归 (v2.1) | ✅ **已实测**: best DenseNet121 Ridge R²(log)=0.342 | 同上 |
+| `2_predict_streetview.py` | 7 backbone 街景特征 MLP+Ridge 回归 (v2.1) | ✅ **已实测**: best ResNet50 MLP R²(log)=0.371 | 同上 |
+| `3_predict_remote_sensing.py` | ESRI 优先 + TIF fallback, 7 backbone MLP+Ridge 回归 (v2.1) | ✅ **已实测**: best DenseNet121 Ridge R²(log)=0.342 | 同上 |
 | `4_build_base_kg.py` | block-POI-主类-子类-landuse KG | ✅ 代码完成, 待跑 | `999-输出成果文件/003-知识图谱/base/` |
 | `5_build_building_kg.py` | + 建筑物/高度/年代/质量/功能 + POI sub_type | ✅ 代码完成, 待跑 | `999-输出成果文件/003-知识图谱/building/` |
 | `6_kg_models.py` | 15 个 KG embedding 模型类 (库文件) | ✅ 代码完成, AST 通过 | — |
-| `7_train_kg.py` | 自对抗训练 + filtered link prediction + embedding 导出 | ✅ 代码完成, 待跑 | `003-知识图谱/<base\|building>/` |
+| `7_train_kg.py` | KGE 训练 + **下游分层归因** (kg_only / kg_nbr / kg_nbr_topo / oracle) **v4.3** | ▶ **代码 v4.3 完成 (2026-05-09)**, v4.2 跑了 base/transe + base/distmult 后被发现作弊驳回 | `003-知识图谱/<base\|building>/embeddings/` |
+| `8_contrastive_kg_image.py` | **KnowCL Stage 1+2** image↔KG InfoNCE + 4 head 下游 (raw/kg-only/contrastive/concat) **v1.0** 🆕 | ▶ **代码 v1.0 完成 (2026-05-09)**, 待 7_v4.3 跑完后再跑 | `003-知识图谱/<base\|building>/contrastive/` |
 
 ### Phase B 运行顺序
 
@@ -283,12 +284,26 @@ python 1_build_labels.py
 python 2_predict_streetview.py --backbone all      # v2.1 已跑
 python 3_predict_remote_sensing.py --backbone all  # v2.1 已跑
 
-# KG 轨道 (▶ 下一步)
+# KG 轨道 (▶ v4.3 重设计, 2026-05-09)
 python 4_build_base_kg.py
 python 5_build_building_kg.py
 python 6_kg_models.py                              # 自测 15 个 forward
-python 7_train_kg.py --kg base     --model all
-python 7_train_kg.py --kg building --model all
+
+# 健康检查: 随机 emb 应该 R²(log) ≈ 0, 否则下游链路有数据漏 / 标签泄漏
+python 7_train_kg.py --plain-block-emb --kgs base --models transe
+
+# 主跑: 4 组特征分层归因 (kg_only / kg_nbr / kg_nbr_topo)
+python 7_train_kg.py --kgs base,building --models transe,distmult,complex,rotate
+
+# 全 15 模型扫一遍
+python 7_train_kg.py --kgs base,building --models transe,distmult,complex,rotate,quate,tucker,mure,murp,murs,roth,refh,atth,cone,m2gnn,gie
+
+# (可选) ablation 上界, 加 handcrafted features
+python 7_train_kg.py --include-oracle --kgs base --models rotate
+
+# 对比学习核心 (KnowCL Stage 1+2)
+python 8_contrastive_kg_image.py --modality sv --backbone all --kg base --kg-model rotate
+python 8_contrastive_kg_image.py --modality rs --backbone all --kg building --kg-model rotate
 ```
 
 ### Phase B 关键输出
@@ -297,38 +312,55 @@ python 7_train_kg.py --kg building --model all
 999-输出成果文件/
 ├── 002-能耗预测/                                ✅ 已落盘
 │   ├── energy_labels.csv, label_stats.json
-│   ├── sv_image_features_<bb>.npz × 7           # v2.1 单图特征缓存
+│   ├── sv_image_features_<bb>.npz × 7           # v2.1 单图特征缓存 (给 8_contrastive 用)
 │   ├── sv_predictions_<bb>.csv × 7              # mlp + ridge 双列
 │   ├── sv_mlp_<bb>.pt × 7
 │   ├── sv_baseline_metrics.csv                  # L0 baseline (mean + aux ridge)
 │   ├── sv_metrics_summary.csv                   # 7×{mlp,ridge}=14 行
 │   ├── sv_all_models.csv                        # 7 backbone mlp 预测并排
 │   ├── rs_images/Block_*.jpg                    # 遥感影像 (一次性)
-│   ├── rs_features_block_<bb>_v2.npz × 7        # v2.1 backbone 特征缓存 (无归一化)
+│   ├── rs_features_block_<bb>_v2.npz × 7        # v2.1 backbone 特征缓存 (给 8_contrastive 用)
 │   ├── rs_predictions_<bb>.csv × 7              # mlp + ridge 双列
 │   ├── rs_baseline_metrics.csv                  # L0 baseline (mean + geom ridge)
 │   ├── rs_metrics_summary.csv                   # 7×{mlp,ridge}=14 行
 │   ├── rs_all_models.csv                        # 7 backbone 预测并排
 │   ├── final_comparison.csv                     # sv × rs × 7 backbone (sv_/rs_ 前缀)
 │   └── metrics_summary_all.csv                  # 街景 + 遥感总指标 28 行
-└── 003-知识图谱/                                ▶ 下一步
+└── 003-知识图谱/                                ▶ v4.3 重设计 (2026-05-09)
+    ├── metrics_summary.csv                      # 每行 = (kg, model, feature_set, ...)
+    │                                            # feature_set ∈ {kg_only, kg_nbr, kg_nbr_topo,
+    │                                            #                kg_oracle_handcraft (仅 --include-oracle)}
+    ├── metrics_contrastive.csv                  # 8_ 输出, 每行 = (modality,backbone,kg_model,head,...)
+    │                                            # head ∈ {baseline_raw_image, baseline_kg_only,
+    │                                            #         contrastive_image, contrastive_concat}
     ├── base/
     │   ├── train/valid/test.tsv
     │   ├── entities.json, relations.json
-    │   ├── block_to_entity.json                 # 下游融合桥
-    │   ├── embeddings_<model>.npz × 15          # 含 block_emb 子集
-    │   ├── metrics_<model>.json × 15
-    │   └── metrics_summary.csv
+    │   ├── block_to_entity.json, block_index.tsv
+    │   ├── block_features.csv                   # 仅 oracle 用, 默认不参与主表
+    │   ├── embeddings/
+    │   │   ├── embeddings_<model>.npz × 15      # 含 ent_emb/rel_emb + block_id/block_emb
+    │   │   └── metrics_<model>.json × 15        # 单模型 KGE+下游 4 组详细
+    │   └── contrastive/
+    │       └── contrastive_<modality>_<bb>_<kg_model>.npz   # 投影头 + 投影后向量
     └── building/ (结构同 base)
 ```
 
-### Phase B 验收标准 (实际达成)
+### Phase B 验收标准 (实际达成 + 新增)
 
 - ✅ `metrics_summary_all.csv` 有 28 行 (14 sv + 14 rs), R²(log) ≥ 0.3 视为流程通畅 — **达成**: SV 最高 0.371, SI 最高 0.342
-- ⏸ `base/metrics_summary.csv` 有 15 行, MRR > 0.05 视为 KG 有信号 — **待 Step 4-7 跑出**
-- 跑出数字后把两张 csv 贴回, 决定哪个 backbone / KG 模型进入 Phase 4/5 主流程 (SV: ResNet50 / SI: DenseNet121, 已可推荐)
+- ⏸ `metrics_summary.csv` (7_v4.3 输出) 健康检查标准 (2026-05-09 新):
+   * `--plain-block-emb` 跑随机 emb, `kg_only` 行 R²(log) 应 ≈ 0 (± 0.05)
+   * 真训练后, `kg_nbr` R²(log) 应比 `kg_only` 高 0.05-0.1 (说明 1-hop 邻居有信号)
+   * `kg_nbr_topo` 与 `kg_nbr` 接近 (log(1+deg) 仅小幅增益)
+   * `kg_oracle_handcraft` (若开 --include-oracle) 应明显高于 `kg_nbr_topo`, 这个差距就是 handcrafted 注入的非 KG 信号量, 论文里报为 "oracle ablation"
+- ⏸ `metrics_contrastive.csv` (8_ 输出) 验收 (2026-05-09 新):
+   * `contrastive_image` R²(log) > `baseline_raw_image` 至少 +0.03 (KG 注入有效)
+   * `contrastive_concat` R²(log) > 单模态 baseline 至少 +0.05 (双模态融合验证 KnowCL 论文等级)
+   * InfoNCE 末端 < 1.0 且 alignment 单调下降, 否则模式崩溃, 见 CLAUDE.md § 9 L3
+- 跑出数字后把三张 csv 贴回, 决定 SV/SI ↔ KG 的最佳搭配 (写论文的核心数字)
 
-- **Status:** in_progress (能耗预测轨道 ✅ 完成, KG 轨道 ▶ 下一步)
+- **Status:** in_progress (能耗预测轨道 ✅ 完成, KG embedding 轨道 v4.3 代码完成待跑, 对比学习轨道 v1.0 代码完成待跑)
 
 ---
 
@@ -366,6 +398,9 @@ python 7_train_kg.py --kg building --model all
 | 2026-05-07 | Phase B SI 模态首选 backbone = DenseNet121 (Ridge) — R²(log)=0.342, 击败所有 MLP | 7 backbone 实测; 高维+小样本场景 Ridge 经常稳过 MLP | Phase 4 (E2) |
 | 2026-05-07 | Phase B 单模态精度合格 (净增益 +0.28 / +0.275, 接近 KnowCL 论文水平), 不再优化, 进入 KG 轨道 | 改进收益边际递减; 论文核心贡献是 KG + 多模态融合, 应把会话精力放到 4-7 步 | Phase B |
 | 2026-05-07 | 沈阳能耗任务上 SV < SI 等级**不强行套用**: 实测 log 空间 SV 略胜 SI 略胜 raw 空间, 整体相当 | 与 KnowCL 论文 § 5.2 "城市/指标偏好不同" 一致, 这是任务/数据特性, 不是错误 | Goal / 论文写作 |
+| 2026-05-09 | 7_train_kg.py 重设计 v4.3 **分层归因**: 主表只报 kg_only / kg_nbr / kg_nbr_topo 三组纯 KG 特征 R², handcrafted 仅作 oracle ablation, 必须 --include-oracle 显式开启 | v4.2 默认掺 handcrafted 是"作弊", 用户 2026-05-09 驳回; 论文里 KG 模型代表精度只能用纯 KG 特征算 | Phase B (KG 轨道) |
+| 2026-05-09 | 加 `--plain-block-emb` 健康检查: 随机 emb 下 kg_only R²(log) 应 ≈ 0, 否则下游链路有数据漏 / 标签泄漏 | 为防止"评估作弊"再次发生, 把 sanity check 写进脚本而不是事后人工验证 | Phase B (KG 轨道) |
+| 2026-05-09 | Phase B 新增 Step 8 `8_contrastive_kg_image.py` (KnowCL 论文 § 4 Stage 1+2): 对称点积 InfoNCE τ=0.07, 投影头 2-layer MLP, 公共空间 d_proj=128, batch=32, epochs=200, lr=3e-4 | 项目核心目的本来就是对比学习模型 (CLAUDE § 0), 之前 7_ 只做 KG embedding + 回归没碰核心. Step 8 补齐, 与 Phase 6 主流程功能等价 | Phase B (新增对比学习轨道) |
 
 ---
 
@@ -384,6 +419,7 @@ python 7_train_kg.py --kg building --model all
 | 2026-05-07 | Phase B 街景 v1 7 backbone R²(raw)≈0.02, R²(log)≈0.10, 几近均值预测器 | ① 单图特征 mean 前先 L2 归一化丢幅度 ② 单 mean pooling 丢方差 ③ 无 L0 baseline 对照 | v2 重写: 取消归一化 + mean+std 双池化 + 辅助统计 + Ridge 对照 + L0 self-check; 实测 R²(log) 0.10→0.37 翻倍 | Phase B |
 | 2026-05-07 | v2 街景脚本所有 backbone 完跑后抛 "All arrays must be of the same length" → all_metrics 始终空 → 末尾 KeyError: 'R2_log' | fit_ridge 只返回 test 集预测 (105) 而 MLP 预测全长 (698), 同 DataFrame 时长度不一致 | v2.1: fit_ridge 改为返回全样本预测 + main 末尾防御性处理空 metrics | Phase B |
 | 2026-05-07 | Phase B 遥感 v1 与街景 v1 共享 L2 归一化 bug (单图特征聚合前归一化丢幅度) | v1 模板从街景脚本复制到遥感时未审计每行, 直接保留了 `feats /= np.linalg.norm(...)` | v2.1 删除归一化 + cache 改名 `_v2.npz` 强制重提 + 同步升级 MLP 超参与 baseline 对照 | Phase B |
+| 2026-05-09 | 7_v4.2 默认在下游回归特征里 concat 了 handcrafted features (POI 类目计数 / 建筑统计 / 几何), 用户跑了 base/transe + base/distmult 两行后驳回, 称为"作弊" | 评估"KG 模型 X 的下游能力"时, 特征里掺了非 X 直接产出的强信号; 即使 KG 是随机 emb, 光靠 handcrafted 也能跑到 R²(log) ≈ 0.2-0.3, 论文里站不住 | 重写 v4.3 分层归因: 主表只报 kg_only / kg_nbr / kg_nbr_topo 三组纯 KG 特征, handcrafted 移到 oracle ablation 必须 --include-oracle 显式开启; 加 --plain-block-emb 健康检查; CLAUDE.md § 11 加第 9 条硬约束 | Phase B (KG 轨道) |
 
 ---
 
@@ -393,7 +429,15 @@ python 7_train_kg.py --kg building --model all
 **Phase 1.5 ✅ 完成** — 698 街区 / 9316 张图全量采集到位, streetview_index.csv 已被 Phase B 消费.
 **Phase B in_progress** —
   - ✅ Step 1-3 完成: 标签 + 街景 v2.1 (R²(log)=0.371) + 遥感 v2.1 (R²(log)=0.342)
-  - ▶ **下一步: Step 4-7 KG 轨道** (4_build_base_kg → 7_train_kg)
+  - ⚠ Step 4-7: v4.2 跑了 base/transe + base/distmult 后用户驳回 (作弊判定); v4.3 重写完成 (2026-05-09), 待用户重跑 4_/5_/7_
+  - ▶ Step 8 (新增): `8_contrastive_kg_image.py` v1.0 完成 (2026-05-09), 待 7_v4.3 跑完后再跑
 
 下一个 Phase → **Phase 2 · 流水线基石** (block_index.py 是核心).
-Phase B 下一步 → 跑 `4_build_base_kg.py` 看 base KG 三元组规模 + entities/relations 分布.
+
+Phase B 下一步 (按顺序):
+1. `python 7_train_kg.py --plain-block-emb --kgs base --models transe` (健康检查: kg_only R²(log) 应 ≈ 0)
+2. `python 7_train_kg.py --kgs base,building --models transe,distmult,complex,rotate` (主跑 4 模型)
+3. 看 `metrics_summary.csv`: kg_nbr 比 kg_only 高 0.05+ 才算 KG 内邻居信息有信号
+4. (可选) `--include-oracle` 看 handcrafted 上界差距
+5. `python 8_contrastive_kg_image.py --modality sv --backbone resnet50 --kg base --kg-model rotate` (对比学习 smoke test, 看 contrastive_concat 是否高于 baseline_raw_image + baseline_kg_only)
+6. 跑全量 backbone × kg_model 矩阵, 拿 metrics_contrastive.csv 做最终论文图表

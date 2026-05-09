@@ -349,3 +349,60 @@
   - 然后 5_build_building_kg.py / 6_kg_models.py 自测 / 7_train_kg.py 跑 15 模型 link prediction
   - 出 `metrics_summary.csv` (15 KG 模型 MRR/Hits@K) + `embeddings_<model>.npz` 以备融合阶段用
 - **Git**: `docs(phase-b): session 09 sv+rs v2.1 results landed + claude L2 guard + 4-doc sync`
+
+---
+
+## 2026-05-09 · Session 10 · Phase B KG 轨道踩坑 — 7_v4.2 评估"作弊"被驳回 + 重设计为分层归因 + 新建 8_contrastive
+
+- **Phase**: Phase B (并行轨道) Step 4-7 KG 轨道
+- **Goal of this session**: 修两个根因, 让 KG 下游评估科学合理 + 把项目核心 (跨模态对比学习) 接上.
+- **Actions**:
+  - 用户跑了 7_train_kg.py v4.2 后只完成 base/transe + base/distmult 两行就停下质问:
+    1. v4.2 默认在下游回归特征里 concat 了 `block_features.csv` 的手工特征 (POI 类目计数 / 建筑统计 / 几何). **即使把 KG 替换为随机向量, 光靠 handcrafted 也能跑到 R²(log) ≈ 0.2-0.3**, 这等于在评估"KG 模型的下游能力"时偷渡了大量非 KG 信号. 论文里没法这么写, 是"强词夺理的对齐", 是作弊.
+    2. 项目目的 (CLAUDE.md § 0 / task_plan Goal) 是 KnowCL 风格的**对比学习模型** (街景模态 + KG / 遥感模态 + KG), 不是单纯 KG embedding + ridge 回归. v4.2 完全没碰这个核心目的.
+    3. 4 个 docs 没同步.
+  - 接受质询. 重新设计 `7_train_kg.py` v4.3:
+    * 移除"默认掺 handcrafted"的下游评估方式
+    * 改为**分层归因**: 每模型同时报 4 组特征下的下游 R²:
+      - A. `kg_only`: block_emb (32d) — 最严格 KG
+      - B. `kg_nbr`:  A + per-relation 1-hop 邻居均值 (32 × n_r 维) — 仍纯 KG
+      - C. `kg_nbr_topo`: B + per-relation log(1+deg) — 仍纯 KG
+      - D. `kg_oracle_handcraft`: C + handcrafted — 混合, 仅 `--include-oracle` 显式开启
+    * `metrics_summary.csv` schema 增加 `feature_set` 列, 每模型出 3-4 行
+    * 论文里 KG 模型的代表精度取 **B 或 C** (纯 KG), 与 SV/SI 单模态 (Phase B Step 2/3) 公平对比
+    * 新增 `--plain-block-emb` 健康检查 flag (随机 emb 应该 R² ≈ 0)
+    * KGE 训练完直接保存 `block_id` / `block_emb` 两个键到 npz, 给 8_contrastive 用
+  - 新建 `8_contrastive_kg_image.py` v1.0 (KnowCL 论文 § 4 Stage 1+2 实现):
+    * Stage 1: image features (SV mean+std 池化 / RS per-block) + KG block_emb 过 2-layer MLP 投影头 → 公共 128 维空间, 对称点积 InfoNCE, τ=0.07, 监控 alignment + uniformity
+    * Stage 2: 4 行下游对比
+      - `baseline_raw_image`: 原图像特征直接 ridge/mlp (= E1/E2)
+      - `baseline_kg_only`:  原 KG emb 直接 ridge/mlp (= E3/E4 简版)
+      - `contrastive_image`: img_proj 输出 ridge/mlp (KG-aware image)
+      - `contrastive_concat`: concat(img_proj, kg_proj) ridge/mlp (双模态融合)
+    * 输出: `contrastive_<modality>_<bb>_<kg_model>.npz` + `metrics_contrastive.csv` 增量追加
+  - 同步全量更新 4 docs (本条)
+- **Files produced/modified**:
+  - `phase_b_scripts/7_train_kg.py` · 重写 v4.3 (~734 行)
+  - `phase_b_scripts/8_contrastive_kg_image.py` · 创建 (~566 行) 🆕
+  - `docs/CLAUDE.md` · 修改 (§ 0 加 Phase B 第 8 步 + § 9 L4 KG 评估第 5 项戒律 + § 11 硬约束第 9 条)
+  - `docs/task_plan.md` · 修改 (Phase B 步骤 4-7 重写 + Step 8 新增 + Decisions +3 行 + Errors +1 行)
+  - `docs/findings.md` · 修改 (§ 9 +3 条 KG 评估发现 + § 11.1 表追加 7_v4.3 / 8_)
+  - `docs/progress.md` · 追加本条
+- **Key findings** (待 append 到 findings.md § 9):
+  - **下游评估"作弊"判别准则**: 若把 KG embedding 替换为随机向量, 下游 R² 仍 ≥ 0.2, 说明手工特征/标签泄漏 dominant, 不能算 KG 模型精度. 解法: 加 `--plain-block-emb` flag 做健康检查, 必须 R² ≈ 0.
+  - **KnowCL 对比学习的 SV image features 池化**: 街景 N 张图先经 backbone → mean+std 双池化 → per-block (2D 维), 然后送 InfoNCE 投影头. SI 单图直接送即可.
+  - **三方交集 BlockID 必须 ≥ 100**: labels ∩ image ∩ kg, 否则 InfoNCE batch 内 (B=32) 负样本太少, 退化为 batch normalization. Phase B 698 标签 × 698 街景 × ~700 KG block ≈ 698, 安全.
+- **Errors encountered**:
+  - v4.2 默认掺 handcrafted features 做下游评估 — 用户驳回, 不科学, 已记 task_plan Errors. 教训: 涉及"评估某模型的下游能力"时, 任何**非该模型直接产出**的特征都必须在 ablation 表里隔离, 不能默认参与主表打分.
+- **Open issues**:
+  - ⚠ 7_v4.3 改动了 npz schema (新增 block_id / block_emb), 老 npz 文件需要重跑或加兼容代码 (8_ 已有回退到 ent_emb + block_index.tsv 的逻辑)
+  - ⚠ 8_ 第一次跑要求 7_ 先跑过, 而且 KG 模型选哪个 (transe / distmult / complex / rotate) 直接影响 InfoNCE 收敛: 建议先用 link prediction MRR 最高的那个 (用户上次跑 base 上 transe MRR=0.615, rotate 通常更好, 等用户跑完 rotate 再决定)
+  - ⚠ 街景 png_image_features 的 schema (block_id / block_ids / ids 哪个 key) 没有在 2_v2.1 文档化, 8_ 已做 try fallback, 但用户首次跑可能需要看 npz.files 列出的实际 key 微调
+  - 论文里精度等级 SV < SI < base-KG < bldg-UKG < bldg-UKG+SV < bldg-UKG+SI 现在能干净验证: SV/SI 在 sv_metrics_summary / rs_metrics_summary 里, base-KG / bldg-UKG (纯 B 或 C) 在 metrics_summary.csv 里, +SV / +SI 在 metrics_contrastive.csv 里
+- **Next session**:
+  - 用户先重跑 4_/5_ 让 v4.3 写进新 npz schema (block_id/block_emb), 再跑 7_v4.3 看 4 组特征对比
+  - 看 `kg_only` 和 `kg_nbr` 的 R²(log) 差距 (期望 nbr 比 only 高 0.05-0.1, 说明 1-hop 邻居有信号)
+  - 跑 `--plain-block-emb` 验证: 随机 emb 下 `kg_only` R²(log) 应 ≈ 0, `kg_nbr_topo` 因为有 log(1+deg) 拓扑统计可能有 0.05-0.1
+  - 然后跑 8_: `python 8_contrastive_kg_image.py --modality sv --backbone resnet50 --kg base --kg-model rotate`
+- **Git**: `feat(phase-b): 7_v4.3 layered attribution + 8_ contrastive infonce + 4-doc sync`
+
